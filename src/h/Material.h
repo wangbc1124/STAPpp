@@ -53,6 +53,20 @@ public:
 	virtual void Write(COutputter& output);
 };
 
+//! Material class for beam element
+class CBeamMaterial : public CMaterial
+{
+public:
+
+	double Area;	//!< Cross-sectional area
+	double I;		//!< Moment of inertia
+
+public:
+
+	virtual bool Read(ifstream& Input);
+	virtual void Write(COutputter& output);
+};
+
 //! Material class for Q4 element
 class CQ4Material : public CMaterial
 {

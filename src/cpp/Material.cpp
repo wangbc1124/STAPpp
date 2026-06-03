@@ -41,6 +41,21 @@ bool CQ4Material::Read(ifstream& Input)
 	return true;
 }
 
+//	Read beam material data from stream Input
+bool CBeamMaterial::Read(ifstream& Input)
+{
+	Input >> nset;
+	Input >> E >> Area >> I;
+
+	return true;
+}
+
+//	Write beam material data to Stream
+void CBeamMaterial::Write(COutputter& output)
+{
+	output << setw(16) << E << setw(16) << Area << setw(16) << I << endl;
+}
+
 //	Write material data to Stream
 void CQ4Material::Write(COutputter& output)
 {

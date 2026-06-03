@@ -151,6 +151,7 @@ void COutputter::OutputElementInfo()
 			  << "     EQ.2, FOUR-NODE PLANE ELEMENTS (FULL INTEGRATION)" << endl
 			  << "     EQ.3, FOUR-NODE PLANE ELEMENTS (REDUCED INTEGRATION)" << endl
 			  << "     EQ.4, THREE-NODE TRIANGULAR PLANE ELEMENTS (CST)" << endl
+			  << "     EQ.6, TWO-NODE BEAM ELEMENTS" << endl
 			  << endl;
 
 		*this << " NUMBER OF ELEMENTS. . . . . . . . . . .( NPAR(2) ) . . =" << setw(5) << NUME
@@ -173,6 +174,11 @@ void COutputter::OutputElementInfo()
 		    case ElementTypes::T3: // T3 element (CST)
 		    {
 		        OutputT3Elements(EleGrp);
+		        break;
+		    }
+		    case ElementTypes::Beam: // Beam element
+		    {
+		        OutputBeamElements(EleGrp);
 		        break;
 		    }
 		    default:
@@ -358,6 +364,25 @@ void COutputter::OutputElementStress()
 				break;
 			}
 
+				case ElementTypes::Beam: // Beam element
+				{
+					*this << "  ELEMENT        AXIAL-STRESS     BEND-STRESS1     BEND-STRESS2" << endl
+						<< "  NUMBER" << endl;
+				
+					for (unsigned int Ele = 0; Ele < NUME; Ele++)
+					{
+						CElement& Element = EleGrp[Ele];
+						double stress[3] = {0.0, 0.0, 0.0};
+						Element.ElementStress(stress, Displacement);
+						*this << setw(5) << Ele + 1 << setw(18) << stress[0] << setw(18) << stress[1]
+							<< setw(18) << stress[2] << endl;
+					}
+				
+					*this << endl;
+				
+					break;
+				}
+				
 			case ElementTypes::Q4: // Q4 element (full integration)
 		    case ElementTypes::Q4R: // Q4R element (reduced integration)
 		    case ElementTypes::T3: // T3 element (CST)
@@ -387,6 +412,50 @@ void COutputter::OutputElementStress()
 }
 
 //	Print total system data
+//	Output beam element data
+void COutputter::OutputBeamElements(unsigned int EleGrp)
+{
+	CDomain* FEMData = CDomain::GetInstance();
+
+	CElementGroup& ElementGroup = FEMData->GetEleGrpList()[EleGrp];
+	unsigned int NUMMAT = ElementGroup.GetNUMMAT();
+
+	*this << " M A T E R I A L   D E F I N I T I O N" << endl
+		  << endl;
+	*this << " NUMBER OF DIFFERENT SETS OF MATERIAL" << endl;
+	*this << " AND SECTION CONSTANTS  . . . . . . .( NPAR(3) ) . . =" << setw(5) << NUMMAT
+		  << endl
+		  << endl;
+
+	*this << "  SET       YOUNG'S     CROSS-SECTIONAL    MOMENT OF" << endl
+		  << " NUMBER     MODULUS          AREA           INERTIA" << endl
+		  << "               E              A               I" << endl;
+
+	*this << setiosflags(ios::scientific) << setprecision(5);
+
+	for (unsigned int mset = 0; mset < NUMMAT; mset++)
+	{
+		*this << setw(5) << mset + 1;
+		ElementGroup.GetMaterial(mset).Write(*this);
+	}
+
+	*this << endl << endl
+		  << " E L E M E N T   I N F O R M A T I O N" << endl;
+
+	*this << " ELEMENT     NODE     NODE       MATERIAL" << endl
+		  << " NUMBER-N      I        J       SET NUMBER" << endl;
+
+	unsigned int NUME = ElementGroup.GetNUME();
+
+	for (unsigned int Ele = 0; Ele < NUME; Ele++)
+	{
+		*this << setw(5) << Ele + 1;
+		ElementGroup[Ele].Write(*this);
+	}
+
+	*this << endl;
+}
+
 //	Output T3 element data
 void COutputter::OutputT3Elements(unsigned int EleGrp)
 {
