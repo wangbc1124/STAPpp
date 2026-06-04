@@ -67,6 +67,19 @@ public:
 	virtual void Write(COutputter& output);
 };
 
+//! Material class for H8 3D solid element
+class CH8Material : public CMaterial
+{
+public:
+
+	double Nu;		//!< Poisson's ratio
+
+public:
+
+	virtual bool Read(ifstream& Input);
+	virtual void Write(COutputter& output);
+};
+
 //! Material class for Q4 element
 class CQ4Material : public CMaterial
 {

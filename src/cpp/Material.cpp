@@ -56,6 +56,21 @@ void CBeamMaterial::Write(COutputter& output)
 	output << setw(16) << E << setw(16) << Area << setw(16) << I << endl;
 }
 
+//	Read H8 material data from stream Input
+bool CH8Material::Read(ifstream& Input)
+{
+	Input >> nset;
+	Input >> E >> Nu;
+
+	return true;
+}
+
+//	Write H8 material data to Stream
+void CH8Material::Write(COutputter& output)
+{
+	output << setw(16) << E << setw(16) << Nu << endl;
+}
+
 //	Write material data to Stream
 void CQ4Material::Write(COutputter& output)
 {

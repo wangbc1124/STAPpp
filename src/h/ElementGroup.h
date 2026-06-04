@@ -18,6 +18,7 @@
 #include "Q4R.h"
 #include "T3.h"
 #include "Beam.h"
+#include "H8.h"
 #include "Material.h"
 #include "Node.h"
 
