@@ -68,6 +68,9 @@ public:
 //! Output H8 element data
 	void OutputH8Elements(unsigned int EleGrp);
 
+//! Output Plate element data
+	void OutputPlateElements(unsigned int EleGrp);
+
 //!	Output load data 
 	void OutputLoadInfo(); 
 

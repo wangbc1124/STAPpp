@@ -86,6 +86,10 @@ void CElementGroup::CalculateMemberSize()
             ElementSize_ = sizeof(CH8);
             MaterialSize_ = sizeof(CH8Material);
             break;
+        case ElementTypes::Plate:
+            ElementSize_ = sizeof(CPlate);
+            MaterialSize_ = sizeof(CQ4Material);
+            break;
         default:
             std::cerr << "Type " << ElementType_ << " not available. See CElementGroup::CalculateMemberSize." << std::endl;
             exit(5);
@@ -116,6 +120,9 @@ void CElementGroup::AllocateElements(std::size_t size)
         case ElementTypes::H8:
             ElementList_ = new CH8[size];
             break;
+        case ElementTypes::Plate:
+            ElementList_ = new CPlate[size];
+            break;
         default:
             std::cerr << "Type " << ElementType_ << " not available. See CElementGroup::AllocateElement." << std::endl;
             exit(5);
@@ -139,6 +146,7 @@ void CElementGroup::AllocateMaterials(std::size_t size)
         case ElementTypes::Q4:
         case ElementTypes::Q4R:
         case ElementTypes::T3:
+        case ElementTypes::Plate:
             MaterialList_ = new CQ4Material[size];
             break;
         default:

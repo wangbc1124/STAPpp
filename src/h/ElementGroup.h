@@ -19,6 +19,7 @@
 #include "T3.h"
 #include "Beam.h"
 #include "H8.h"
+#include "Plate.h"
 #include "Material.h"
 #include "Node.h"
 
