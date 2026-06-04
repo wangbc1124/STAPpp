@@ -1,5 +1,5 @@
 TITLE : H8 Partition Test - 2x2x1 Mesh Uniaxial Tension
-        (12:56:1 on June 2, 2026, Tuesday)
+        (18:49:26 on June 2, 2026, Tuesday)
 
 C O N T R O L   I N F O R M A T I O N
 
@@ -82,6 +82,7 @@ C O N T R O L   I N F O R M A T I O N
      EQ.4, THREE-NODE TRIANGULAR PLANE ELEMENTS (CST)
      EQ.5, EIGHT-NODE HEXAHEDRAL ELEMENTS
      EQ.6, TWO-NODE BEAM ELEMENTS
+     EQ.7, FOUR-NODE PLATE BENDING ELEMENTS
 
  NUMBER OF ELEMENTS. . . . . . . . . . .( NPAR(2) ) . . =    4
 
@@ -155,9 +156,9 @@ C O N T R O L   I N F O R M A T I O N
 
  S O L U T I O N   T I M E   L O G   I N   S E C 
 
-     TIME FOR INPUT PHASE = 8.00000e-03
+     TIME FOR INPUT PHASE = 3.00000e-03
      TIME FOR CALCULATION OF STIFFNESS MATRIX = 0.00000e+00
      TIME FOR FACTORIZATION AND LOAD CASE SOLUTIONS = 0.00000e+00
 
-     T O T A L   S O L U T I O N   T I M E = 8.00000e-03
+     T O T A L   S O L U T I O N   T I M E = 3.00000e-03
 

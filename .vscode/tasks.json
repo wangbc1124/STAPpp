@@ -1,0 +1,88 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build stap++ (release)",
+            "type": "shell",
+            "command": "g++",
+            "args": [
+                "-std=c++11", "-O2",
+                "-I", "${workspaceFolder}/src/h",
+                "${workspaceFolder}/src/cpp/main.cpp",
+                "${workspaceFolder}/src/cpp/Domain.cpp",
+                "${workspaceFolder}/src/cpp/Node.cpp",
+                "${workspaceFolder}/src/cpp/ElementGroup.cpp",
+                "${workspaceFolder}/src/cpp/Bar.cpp",
+                "${workspaceFolder}/src/cpp/Beam.cpp",
+                "${workspaceFolder}/src/cpp/Q4.cpp",
+                "${workspaceFolder}/src/cpp/Q4R.cpp",
+                "${workspaceFolder}/src/cpp/T3.cpp",
+                "${workspaceFolder}/src/cpp/H8.cpp",
+                "${workspaceFolder}/src/cpp/Plate.cpp",
+                "${workspaceFolder}/src/cpp/Material.cpp",
+                "${workspaceFolder}/src/cpp/LoadCaseData.cpp",
+                "${workspaceFolder}/src/cpp/Solver.cpp",
+                "${workspaceFolder}/src/cpp/Outputter.cpp",
+                "${workspaceFolder}/src/cpp/Clock.cpp",
+                "-o", "${workspaceFolder}/build/stap++.exe"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/build"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "build stap++ (debug)",
+            "type": "shell",
+            "command": "g++",
+            "args": [
+                "-std=c++11", "-g", "-O0", "-D_DEBUG_",
+                "-I", "${workspaceFolder}/src/h",
+                "${workspaceFolder}/src/cpp/main.cpp",
+                "${workspaceFolder}/src/cpp/Domain.cpp",
+                "${workspaceFolder}/src/cpp/Node.cpp",
+                "${workspaceFolder}/src/cpp/ElementGroup.cpp",
+                "${workspaceFolder}/src/cpp/Bar.cpp",
+                "${workspaceFolder}/src/cpp/Beam.cpp",
+                "${workspaceFolder}/src/cpp/Q4.cpp",
+                "${workspaceFolder}/src/cpp/Q4R.cpp",
+                "${workspaceFolder}/src/cpp/T3.cpp",
+                "${workspaceFolder}/src/cpp/H8.cpp",
+                "${workspaceFolder}/src/cpp/Plate.cpp",
+                "${workspaceFolder}/src/cpp/Material.cpp",
+                "${workspaceFolder}/src/cpp/LoadCaseData.cpp",
+                "${workspaceFolder}/src/cpp/Solver.cpp",
+                "${workspaceFolder}/src/cpp/Outputter.cpp",
+                "${workspaceFolder}/src/cpp/Clock.cpp",
+                "-o", "${workspaceFolder}/build/stap++.exe"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/build"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "convert inp to dat",
+            "type": "shell",
+            "command": "python3",
+            "args": [
+                "${workspaceFolder}/Bridge-1/convert_inp_to_dat.py",
+                "${workspaceFolder}/Bridge-1/Bridge-1.inp",
+                "${workspaceFolder}/Bridge-1/Bridge-1.dat"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/Bridge-1"
+            },
+            "group": "build",
+            "problemMatcher": []
+        }
+    ]
+}

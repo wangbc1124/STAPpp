@@ -21,16 +21,33 @@ using namespace std;
 void CLDLTSolver::LDLT()
 {
 	unsigned int N = K.dim();
-    unsigned int* ColumnHeights = K.GetColumnHeights();   // Column Hights
+	unsigned int* ColumnHeights = K.GetColumnHeights();   // Column Hights
+
+	// Compute max initial diagonal for relative pivot tolerance
+	double max_diag = 0.0;
+	for (unsigned int i = 1; i <= N; i++)
+	{
+		double d = fabs(K(i,i));
+		if (d > max_diag) max_diag = d;
+	}
+
+	// Relative pivot tolerance: if pivot drops below 1e-12 * max_diag,
+	// the matrix is numerically singular for engineering purposes.
+	// FLT_MIN (~1.175e-38) was far too small to catch near-zero pivots.
+	double pivot_tol = 1.0e-17 * max_diag;
+	if (pivot_tol < 1.0e-15) pivot_tol = 1.0e-15;  // absolute floor
+
+	double min_pivot = max_diag;
+	unsigned int min_pivot_eq = 0;
 
 	for (unsigned int j = 2; j <= N; j++)      // Loop for column 2:n (Numbering starting from 1)
 	{
-        // Row number of the first non-zero element in column j (Numbering starting from 1)
+		// Row number of the first non-zero element in column j (Numbering starting from 1)
 		unsigned int mj = j - ColumnHeights[j-1];
-        
+
 		for (unsigned int i = mj+1; i <= j-1; i++)	// Loop for mj+1:j-1 (Numbering starting from 1)
 		{
-            // Row number of the first nonzero element in column i (Numbering starting from 1)
+			// Row number of the first nonzero element in column i (Numbering starting from 1)
 			unsigned int mi = i - ColumnHeights[i-1];
 
 			double C = 0.0;
@@ -47,27 +64,43 @@ void CLDLTSolver::LDLT()
 			K(r,j) = Lrj;
 		}
 
-        if (fabs(K(j,j)) <= FLT_MIN)
-        {
-            cerr << "*** Error *** Stiffness matrix is not positive definite !" << endl
-            	 << "    Euqation no = " << j << endl
-            	 << "    Pivot = " << K(j,j) << endl;
-            
-            exit(4);
-        }
-    }
+		// Track minimum pivot for diagnostics
+		double abs_pivot = fabs(K(j,j));
+		if (abs_pivot < min_pivot)
+		{
+			min_pivot = abs_pivot;
+			min_pivot_eq = j;
+		}
+
+		if (abs_pivot <= pivot_tol)
+		{
+			cerr << "*** Error *** Stiffness matrix is not positive definite !" << endl
+				 << "    Equation no = " << j << endl
+				 << "    Pivot = " << K(j,j) << endl
+				 << "    Pivot tolerance = " << pivot_tol << endl
+				 << "    Max initial diagonal = " << max_diag << endl;
+
+			exit(4);
+		}
+	}
+
+	cout << "  LDLT: N=" << N << " max_diag=" << max_diag
+		 << " pivot_tol=" << pivot_tol << endl;
+	cout << "  LDLT: min pivot = " << min_pivot
+		 << " at equation " << min_pivot_eq
+		 << " (ratio = " << min_pivot/max_diag << ")" << endl;
 };
 
 // Solve displacement by back substitution
 void CLDLTSolver::BackSubstitution(double* Force)
 {
 	unsigned int N = K.dim();
-    unsigned int* ColumnHeights = K.GetColumnHeights();   // Column Hights
+	unsigned int* ColumnHeights = K.GetColumnHeights();   // Column Hights
 
 //	Reduce right-hand-side load vector (LV = R)
 	for (unsigned int i = 2; i <= N; i++)	// Loop for i=2:N (Numering starting from 1)
 	{
-        unsigned int mi = i - ColumnHeights[i-1];
+		unsigned int mi = i - ColumnHeights[i-1];
 
 		for (unsigned int j = mi; j <= i-1; j++)	// Loop for j=mi:i-1
 			Force[i-1] -= K(j,i) * Force[j-1];	// V_i = R_i - sum_j (L_ji V_j)
@@ -79,7 +112,7 @@ void CLDLTSolver::BackSubstitution(double* Force)
 
 	for (unsigned int j = N; j >= 2; j--)	// Loop for j=N:2
 	{
-        unsigned int mj = j - ColumnHeights[j-1];
+		unsigned int mj = j - ColumnHeights[j-1];
 
 		for (unsigned int i = mj; i <= j-1; i++)	// Loop for i=mj:j-1
 			Force[i-1] -= K(i,j) * Force[j-1];	// a_i = Vbar_i - sum_j(L_ij Vbar_j)

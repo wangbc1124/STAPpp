@@ -1,3 +1,10 @@
 {
-    "cmake.sourceDirectory": "D:/下载/STAPpp-master/STAPpp-master/src"
+    "cmake.sourceDirectory": "D:/STAPpp-master/STAPpp-master/src",
+    "terminal.integrated.profiles.windows": {
+        "MSYS2 UCRT64": {
+            "path": "D:\\msys64\\ucrt64.exe",
+            "args": ["-defterm", "-here", "-no-start"]
+        }
+    },
+    "terminal.integrated.defaultProfile.windows": "MSYS2 UCRT64"
 }
