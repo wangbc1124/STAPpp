@@ -193,8 +193,18 @@ def parse_part(lines, start):
             i += 1
             if i < len(lines) and not lines[i].startswith('*'):
                 sec['data'] = [float(x.strip()) for x in lines[i].split(',') if x.strip()]
+                i += 1
+                # For Beam Section, also read n1 direction vector on next line
+                if 'Beam Section' in sec['type']:
+                    if i < len(lines) and not lines[i].startswith('*'):
+                        try:
+                            n1_vals = [float(x.strip()) for x in lines[i].split(',') if x.strip()]
+                            if len(n1_vals) >= 3:
+                                sec['n1'] = n1_vals[:3]
+                            i += 1
+                        except ValueError:
+                            pass  # not a float line, skip
             sections[sec.get('elset', '')] = sec
-            i += 1
             continue
 
         else:
@@ -494,7 +504,8 @@ def flatten_assembly(data, merge_tol=1e-3):
                     for sec_eset, sec in part['sections'].items():
                         if sec_eset.split('.')[-1] == eset_name or sec_eset == eset_name:
                             mat_name = sec.get('material', '')
-                            sec_info = sec.get('data', None)
+                            sec_info = {'data': sec.get('data', None),
+                                        'n1': sec.get('n1', None)}
                             break
                     break
 
@@ -634,7 +645,7 @@ def resolve_fixed_nodes(data, node_map):
         gid = node_map.get((inst_name, lnid))
         if gid:
             if gid not in fixed:
-                fixed[gid] = [0, 0, 0]
+                fixed[gid] = [0, 0, 0, 1, 1, 1]
             for d in dofs:
                 fixed[gid][d - 1] = 1  # Abaqus DOF 1,2,3 -> bc[0],[1],[2]
 
@@ -645,15 +656,30 @@ def resolve_fixed_nodes(data, node_map):
 # 4. Write STAP++ .dat file
 # ============================================================
 
+
+def box_section_props(a, b, t1, t2, t3, t4):
+    """Compute cross-section properties for a rectangular box section."""
+    tw = t1 + t2
+    tf = t3 + t4
+    area = a * b - (a - tw) * (b - tf)
+    Iy = (b * a**3 - (b - tf) * (a - tw)**3) / 12.0
+    Iz = (a * b**3 - (a - tw) * (b - tf)**3) / 12.0
+    a0 = a - tw/2.0
+    b0 = b - tf/2.0
+    A0 = a0 * b0
+    sum_st = a0/t1 + a0/t2 + b0/t3 + b0/t4
+    J = 4.0 * A0**2 / sum_st if sum_st > 1e-15 else 0.0
+    return area, Iy, Iz, J
+
 STAP_TYPE_MAP = {
     'T3D2': 1,     # Bar (3D truss, steel cables)
-    'S4R': 2,      # Q4 (plane stress, membrane)
+    'S4R': 10,     # Shell4 (flat shell: membrane + plate bending)
     'C3D8R': 5,    # H8 (3D hexahedral)
-    'B31': 1,      # Bar (3D truss, converted from beam — STAP++ 2D Beam cannot handle XZ plane)
+    'B31': 9,      # Beam3D (3D Euler-Bernoulli beam)
 }
 
 # 3D element type numbers (have stiffness in all 3 directions)
-THREE_D_TYPES = {1, 5}
+THREE_D_TYPES = {1, 5, 9, 10}
 
 def polygon_area(coords):
     """Shoelace formula for polygon area."""
@@ -719,6 +745,22 @@ def write_stap_dat(output_path, data, global_nodes, global_elements,
         if types and not (types & THREE_D_TYPES):
             z_fix_nodes.add(nid)
     print(f"  Z-fixed nodes (2D elements only): {len(z_fix_nodes)}")
+
+    # Nodes connected to Shell4 (type 10) at mesh boundaries have insufficient
+    # rotational stiffness from drilling DOF stabilization alone. Fix rx,ry,rz
+    # for corner/edge nodes (≤ 2 Shell4 elements) to prevent spurious large rotations.
+    shell4_boundary_fix = set()  # node -> set of DOF indices {3,4,5} to fix
+    node_shell4_count = defaultdict(int)
+    for elem in valid_elems:
+        st = STAP_TYPE_MAP[elem['type']]
+        if st == 10:  # Shell4
+            for n in elem['nodes']:
+                node_shell4_count[n] += 1
+
+    for nid, count in node_shell4_count.items():
+        if count <= 2 and 10 in node_elem_types.get(nid, set()):
+            shell4_boundary_fix.add(nid)
+    print(f"  Shell4 boundary nodes (rotation-fixed): {len(shell4_boundary_fix)}")
 
     # Nodes connected only to Bar elements (type 1) with coplanar bars need
     # out-of-plane DOFs fixed. SupportBeam (B31) bars are in XZ plane -> fix Y.
@@ -931,7 +973,9 @@ def write_stap_dat(output_path, data, global_nodes, global_elements,
                 p1 = np.array(global_nodes[econn[0]])
                 p2 = np.array(global_nodes[econn[1]])
                 length = np.linalg.norm(p2 - p1)
-                A = elem['section'][0] if elem.get('section') else 0.25
+                sec = elem.get('section')
+                sec_data = sec.get('data', []) if sec else []
+                A = sec_data[0] if len(sec_data) > 0 else 0.25
                 elem_mass = A * length * rho
             elif etype == 'C3D8R':
                 # H8 brick: compute volume from 8-node hex
@@ -943,9 +987,13 @@ def write_stap_dat(output_path, data, global_nodes, global_elements,
                 p1 = np.array(global_nodes[econn[0]])
                 p2 = np.array(global_nodes[econn[1]])
                 length = np.linalg.norm(p2 - p1)
-                # Box section: 2.0x2.0 with 0.1 wall = 0.76
-                A = 0.76
-                elem_mass = A * length * rho
+                sec = elem.get('section')
+                sec_data = sec.get('data', []) if sec else []
+                if len(sec_data) >= 6:
+                    area_beam, _, _, _ = box_section_props(sec_data[0], sec_data[1], sec_data[2], sec_data[3], sec_data[4], sec_data[5])
+                else:
+                    area_beam = 0.76
+                elem_mass = area_beam * length * rho
             else:
                 elem_mass = 0.0
 
@@ -979,11 +1027,20 @@ def write_stap_dat(output_path, data, global_nodes, global_elements,
 
             if nid in bc_map:
                 bc = bc_map[nid]
-                bc_x, bc_y, bc_z = bc[0], bc[1], bc[2]
+                bc_x, bc_y, bc_z, bc_rx, bc_ry, bc_rz = bc[0], bc[1], bc[2], bc[3], bc[4], bc[5]
             elif nid in orphan_nodes:
-                bc_x, bc_y, bc_z = 1, 1, 1
+                bc_x, bc_y, bc_z, bc_rx, bc_ry, bc_rz = 1, 1, 1, 1, 1, 1
             else:
-                bc_x, bc_y, bc_z = 0, 0, 0
+                bc_x, bc_y, bc_z, bc_rx, bc_ry, bc_rz = 0, 0, 0, 1, 1, 1  # rotations fixed by default
+
+            # Nodes connected to Shell4(10) or Beam3D(9) need rotations active
+            types = node_elem_types.get(nid, set())
+            if 10 in types or 9 in types:
+                # Shell4 boundary nodes: fix rotations to prevent spurious modes
+                if nid in shell4_boundary_fix:
+                    bc_rx = bc_ry = bc_rz = 1
+                else:
+                    bc_rx = bc_ry = bc_rz = 0
 
             # Fix Z for nodes only connected to 2D elements (Q4)
             if nid in z_fix_nodes:
@@ -1000,8 +1057,7 @@ def write_stap_dat(output_path, data, global_nodes, global_elements,
             if nid in q4_bar_z_fix:
                 bc_z = 1
 
-            f.write(f"  {nid}  {bc_x}  {bc_y}  {bc_z}  {x:.6f}  {y:.6f}  {z:.6f}\n")
-
+            f.write(f"  {nid}  {bc_x}  {bc_y}  {bc_z}  {bc_rx}  {bc_ry}  {bc_rz}  {x:.6f}  {y:.6f}  {z:.6f}\n")
         # --- Load data (ALL on ONE line) ---
         nload = len(load_entries)
         f.write(f"  1  {nload}")
@@ -1028,13 +1084,51 @@ def write_stap_dat(output_path, data, global_nodes, global_elements,
             E = mat.get('E', 2e11)
             nu = mat.get('nu', 0.3)
 
-            if stap_type in (1,):  # Bar
-                if abaqus_type == 'B31':
-                    # Box section: 2.0x2.0 with 0.1 wall thickness
-                    area = 2.0 * 2.0 - 1.8 * 1.8  # = 0.76
+            if stap_type in (1,):  # Bar (truss)
+                area = 0.25  # Steel cable
+                f.write(f"    1  {E:.6e}  {area:.6f} ")
+
+
+            elif stap_type in (2,):  # Q4 (membrane)
+                t = 0.2
+                f.write(f"    1  {E:.6e}  {nu:.6f}  {t:.6f} ")
+
+
+            elif stap_type in (5,):  # H8 (solid)
+                f.write(f"    1  {E:.6e}  {nu:.6f} ")
+
+
+            elif stap_type in (9,):  # Beam3D
+                sec_info = None
+                for eid in eids:
+                    e = eid_to_elem.get(eid)
+                    if e and e.get("section"):
+                        sec_info = e["section"]
+                        break
+                if sec_info:
+                    sec_data = sec_info.get('data', [])
+                    n1_vec = sec_info.get('n1', [0.0, 0.0, -1.0])
                 else:
-                    area = 0.25  # Steel cable
-                f.write(f"    1  {E:.6e}  {area:.6f}\n")
+                    sec_data = []
+                    n1_vec = [0.0, 0.0, -1.0]
+                if len(sec_data) >= 6:
+                    a, b, t1, t2, t3, t4 = sec_data[0:6]
+                    area, Iy, Iz, J = box_section_props(a, b, t1, t2, t3, t4)
+                else:
+                    area, Iy, Iz, J = 0.76, 0.4585, 0.4585, 0.6859
+                # Validate n1: if zero or parallel to beam axis, fall back
+                n1_norm = sum(v*v for v in n1_vec)**0.5
+                if n1_norm < 1e-10:
+                    n1_vec = [0.0, 0.0, -1.0]
+                    area, Iy, Iz, J = 0.76, 0.4585, 0.4585, 0.6859
+                f.write(f"    1  {E:.6e}  {nu:.6f}  {area:.6f}  {Iy:.6f}  {Iz:.6f}  {J:.6f}  {n1_vec[0]:.6f}  {n1_vec[1]:.6f}  {n1_vec[2]:.6f} ")
+
+
+            elif stap_type in (10,):  # Shell4 (flat shell)
+                t = 0.2
+                f.write(f"    1  {E:.6e}  {nu:.6f}  {t:.6f} ")
+
+
             elif stap_type in (2,):  # Q4
                 f.write(f"    1  {E:.6e}  {nu:.6f}  0.200000\n")
             elif stap_type in (5,):  # H8

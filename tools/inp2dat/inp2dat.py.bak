@@ -1,0 +1,573 @@
+#!/usr/bin/env python3
+import argparse
+import math
+from collections import defaultdict
+
+
+def trim(s):
+    return s.strip()
+
+
+def split_comma(s):
+    return [x.strip() for x in s.split(",")]
+
+
+def header_value(header, key):
+    prefix = key.lower() + "="
+    for part in split_comma(header):
+        if part.lower().startswith(prefix):
+            return part[len(prefix):].strip()
+    return ""
+
+
+def header_has_flag(header, flag):
+    return any(part.strip().lower() == flag.lower() for part in split_comma(header))
+
+
+def parse_floats(line):
+    return [float(x) for x in split_comma(line) if x]
+
+
+def parse_set_lines(lines, i, generate=False):
+    nums = []
+    while i < len(lines) and not lines[i].startswith("*"):
+        for tok in split_comma(lines[i]):
+            if tok:
+                nums.append(int(tok))
+        i += 1
+    if generate and len(nums) == 3:
+        a, b, step = nums
+        nums = list(range(a, b + 1, step))
+    return nums, i
+
+
+def vec_add(a, b):
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
+def vec_sub(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def vec_dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def vec_cross(a, b):
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+def vec_norm(a):
+    return math.sqrt(vec_dot(a, a))
+
+
+def vec_scale(a, s):
+    return (a[0] * s, a[1] * s, a[2] * s)
+
+
+def vec_normalize(a):
+    n = vec_norm(a)
+    if n < 1.0e-15:
+        return (0.0, 0.0, 0.0)
+    return vec_scale(a, 1.0 / n)
+
+
+def rotate_rodrigues(v, axis_a, axis_b, angle_deg):
+    u = vec_normalize(vec_sub(axis_b, axis_a))
+    if vec_norm(u) < 1.0e-15:
+        return v
+    theta = math.radians(angle_deg)
+    c = math.cos(theta)
+    s = math.sin(theta)
+    uxv = vec_cross(u, v)
+    udotv = vec_dot(u, v)
+    return vec_add(vec_add(vec_scale(v, c), vec_scale(uxv, s)), vec_scale(u, udotv * (1.0 - c)))
+
+
+def polygon_area_xy(conn, nodes):
+    area = 0.0
+    for i, nid in enumerate(conn):
+        a = nodes[nid]
+        b = nodes[conn[(i + 1) % len(conn)]]
+        area += a[0] * b[1] - b[0] * a[1]
+    return abs(area) * 0.5
+
+
+def det3(m):
+    return (
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    )
+
+
+def hex_volume(conn, nodes):
+    signs = [
+        (-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1),
+        (-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1),
+    ]
+    j = [[0.0, 0.0, 0.0] for _ in range(3)]
+    for a, nid in enumerate(conn[:8]):
+        x, y, z = nodes[nid]
+        for col in range(3):
+            d = signs[a][col] / 8.0
+            j[0][col] += d * x
+            j[1][col] += d * y
+            j[2][col] += d * z
+    return abs(det3(j)) * 8.0
+
+
+def parse_part(lines, i):
+    part = {"nodes": {}, "elements": [], "sections": {}, "nsets": {}, "elsets": {}}
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("*End Part"):
+            return part, i + 1
+        if line.startswith("*Node"):
+            i += 1
+            while i < len(lines) and not lines[i].startswith("*"):
+                p = split_comma(lines[i])
+                if len(p) >= 4:
+                    part["nodes"][int(p[0])] = (float(p[1]), float(p[2]), float(p[3]))
+                i += 1
+            continue
+        if line.startswith("*Element"):
+            etype = header_value(line, "type")
+            i += 1
+            while i < len(lines) and not lines[i].startswith("*"):
+                p = split_comma(lines[i])
+                if len(p) >= 2:
+                    part["elements"].append({
+                        "id": int(p[0]),
+                        "type": etype,
+                        "nodes": [int(x) for x in p[1:] if x],
+                    })
+                i += 1
+            continue
+        if line.startswith("*Nset"):
+            name = header_value(line, "nset")
+            nums, i = parse_set_lines(lines, i + 1, header_has_flag(line, "generate"))
+            part["nsets"][name] = nums
+            continue
+        if line.startswith("*Elset"):
+            name = header_value(line, "elset")
+            nums, i = parse_set_lines(lines, i + 1, header_has_flag(line, "generate"))
+            part["elsets"][name] = nums
+            continue
+        if line.startswith("*Solid Section") or line.startswith("*Shell Section") or line.startswith("*Beam Section"):
+            elset = header_value(line, "elset")
+            section = {"material": header_value(line, "material"), "data": []}
+            i += 1
+            if i < len(lines) and not lines[i].startswith("*"):
+                section["data"] = parse_floats(lines[i])
+                i += 1
+            part["sections"][elset] = section
+            continue
+        i += 1
+    return part, i
+
+
+def parse_assembly_set(lines, i, key):
+    header = lines[i]
+    name = header_value(header, key)
+    instance = header_value(header, "instance")
+    nums, i = parse_set_lines(lines, i + 1, header_has_flag(header, "generate"))
+    return {"name": name, "instance": instance, "numbers": nums}, i
+
+
+def parse_assembly(lines, i):
+    assembly = {"instances": [], "nsets": [], "elsets": []}
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("*End Assembly"):
+            return assembly, i + 1
+        if line.startswith("*Instance"):
+            inst = {
+                "name": header_value(line, "name"),
+                "part": header_value(line, "part"),
+                "translation": (0.0, 0.0, 0.0),
+                "rotation": None,
+            }
+            i += 1
+            if i < len(lines) and not lines[i].startswith("*"):
+                vals = parse_floats(lines[i])
+                if len(vals) == 3:
+                    inst["translation"] = tuple(vals)
+                    i += 1
+            if i < len(lines) and not lines[i].startswith("*"):
+                vals = parse_floats(lines[i])
+                if len(vals) == 7:
+                    inst["rotation"] = (tuple(vals[:3]), tuple(vals[3:6]), vals[6])
+                    i += 1
+            assembly["instances"].append(inst)
+            continue
+        if line.startswith("*Nset"):
+            item, i = parse_assembly_set(lines, i, "nset")
+            assembly["nsets"].append(item)
+            continue
+        if line.startswith("*Elset"):
+            item, i = parse_assembly_set(lines, i, "elset")
+            assembly["elsets"].append(item)
+            continue
+        i += 1
+    return assembly, i
+
+
+def parse_material(lines, i):
+    name = header_value(lines[i], "name")
+    mat = {"density": 2320.0, "E": 2.0e11, "nu": 0.3}
+    i += 1
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("*Material") or line.startswith("*Part") or line.startswith("*Assembly") or line.startswith("*Step"):
+            break
+        if line.startswith("*Density"):
+            i += 1
+            if i < len(lines):
+                vals = parse_floats(lines[i])
+                if vals:
+                    mat["density"] = vals[0]
+            i += 1
+            continue
+        if line.startswith("*Elastic"):
+            i += 1
+            if i < len(lines):
+                vals = parse_floats(lines[i])
+                if len(vals) >= 2:
+                    mat["E"] = vals[0]
+                    mat["nu"] = vals[1]
+            i += 1
+            continue
+        i += 1
+    return name, mat, i
+
+
+def parse_step(lines, i):
+    boundaries = []
+    gravity = []
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("*End Step"):
+            return boundaries, gravity, i + 1
+        if line.startswith("*Boundary"):
+            i += 1
+            while i < len(lines) and not lines[i].startswith("*"):
+                p = split_comma(lines[i])
+                if len(p) >= 3:
+                    boundaries.append({"set": p[0], "first": int(p[1]), "last": int(p[2])})
+                i += 1
+            continue
+        if line.startswith("*Dload"):
+            i += 1
+            while i < len(lines) and not lines[i].startswith("*"):
+                p = split_comma(lines[i])
+                if "GRAV" in p:
+                    k = p.index("GRAV")
+                    gravity.append({
+                        "magnitude": float(p[k + 1]),
+                        "direction": (float(p[k + 2]), float(p[k + 3]), float(p[k + 4])),
+                    })
+                i += 1
+            continue
+        i += 1
+    return boundaries, gravity, i
+
+
+def parse_inp(path):
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        lines = [trim(line) for line in f if not trim(line).startswith("**")]
+
+    data = {"parts": {}, "assembly": {}, "materials": {}, "boundaries": [], "gravity": []}
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("*Part"):
+            name = header_value(line, "name")
+            part, i = parse_part(lines, i + 1)
+            data["parts"][name] = part
+            continue
+        if line.startswith("*Assembly"):
+            data["assembly"], i = parse_assembly(lines, i + 1)
+            continue
+        if line.startswith("*Material"):
+            name, mat, i = parse_material(lines, i)
+            data["materials"][name] = mat
+            continue
+        if line.startswith("*Step"):
+            bcs, grav, i = parse_step(lines, i + 1)
+            data["boundaries"].extend(bcs)
+            data["gravity"].extend(grav)
+            continue
+        i += 1
+    return data
+
+
+def find_section(part, elem_id):
+    for elset_name, elem_ids in part["elsets"].items():
+        if elem_id not in elem_ids:
+            continue
+        for sec_name, sec in part["sections"].items():
+            short_name = sec_name.rsplit(".", 1)[-1]
+            if sec_name == elset_name or short_name == elset_name:
+                return sec
+    return {"material": "", "data": []}
+
+
+def flatten_assembly(data, merge_tol=1.0e-6):
+    raw_nodes = {}
+    raw_elements = []
+    node_map_raw = {}
+    next_node = 1
+    next_elem = 1
+
+    for inst in data["assembly"].get("instances", []):
+        part = data["parts"].get(inst["part"])
+        if part is None:
+            print(f"  WARNING: part '{inst['part']}' not found for instance '{inst['name']}'")
+            continue
+
+        local_to_global = {}
+        for local_id, coord in part["nodes"].items():
+            p = coord
+            if inst["rotation"]:
+                axis_a, axis_b, angle = inst["rotation"]
+                p = rotate_rodrigues(p, axis_a, axis_b, angle)
+            p = vec_add(p, inst["translation"])
+            gid = next_node
+            next_node += 1
+            raw_nodes[gid] = p
+            local_to_global[local_id] = gid
+            node_map_raw[(inst["name"], local_id)] = gid
+
+        for src in part["elements"]:
+            sec = find_section(part, src["id"])
+            raw_elements.append({
+                "id": next_elem,
+                "type": src["type"],
+                "nodes": [local_to_global[n] for n in src["nodes"]],
+                "material": sec.get("material", ""),
+                "section": sec.get("data", []),
+            })
+            next_elem += 1
+
+    coord_to_node = {}
+    old_to_new = {}
+    nodes = {}
+    next_new = 1
+    for old_id, p in sorted(raw_nodes.items()):
+        key = tuple(round(x / merge_tol) for x in p)
+        if key not in coord_to_node:
+            coord_to_node[key] = next_new
+            old_to_new[old_id] = next_new
+            nodes[next_new] = p
+            next_new += 1
+        else:
+            old_to_new[old_id] = coord_to_node[key]
+
+    if len(nodes) != len(raw_nodes):
+        print(f"  Coincident nodes merged: {len(raw_nodes) - len(nodes)}")
+
+    for elem in raw_elements:
+        elem["nodes"] = [old_to_new[n] for n in elem["nodes"]]
+
+    node_map = {key: old_to_new[old] for key, old in node_map_raw.items()}
+    return nodes, raw_elements, node_map
+
+
+def stap_type(etype):
+    return {"T3D2": 1, "S4R": 2, "C3D8R": 5, "B31": 1}.get(etype, 0)
+
+
+def resolve_fixed_nodes(data, node_map):
+    fixed = defaultdict(lambda: [0, 0, 0])
+    for bc in data["boundaries"]:
+        for nset in data["assembly"].get("nsets", []):
+            if nset["name"] != bc["set"]:
+                continue
+            for local_id in nset["numbers"]:
+                gid = node_map.get((nset["instance"], local_id))
+                if not gid:
+                    continue
+                for dof in range(bc["first"], min(bc["last"], 3) + 1):
+                    fixed[gid][dof - 1] = 1
+    return dict(fixed)
+
+
+def write_dat(path, data, nodes, elements, node_map):
+    valid = [e for e in elements if stap_type(e["type"])]
+    skipped = defaultdict(int)
+    for e in elements:
+        if not stap_type(e["type"]):
+            skipped[e["type"]] += 1
+    for etype, count in skipped.items():
+        print(f"  WARNING: unknown element type {etype}, skipping {count} elements")
+
+    fixed = resolve_fixed_nodes(data, node_map)
+    print(f"  Fixed nodes (from BCs): {len(fixed)}")
+
+    connected = set()
+    node_types = defaultdict(set)
+    node_bar_elems = defaultdict(list)
+    for e in valid:
+        st = stap_type(e["type"])
+        for n in e["nodes"]:
+            connected.add(n)
+            node_types[n].add(st)
+            if st == 1:
+                node_bar_elems[n].append(e)
+
+    orphan_nodes = set(nodes) - connected
+    if orphan_nodes:
+        print(f"  Orphan nodes (will be fully fixed): {len(orphan_nodes)}")
+
+    z_fix_nodes = {nid for nid, types in node_types.items() if 1 not in types and 5 not in types}
+    print(f"  Z-fixed nodes (2D elements only): {len(z_fix_nodes)}")
+
+    bar_fix_nodes = {}
+    for nid, elems in node_bar_elems.items():
+        if node_types[nid] != {1}:
+            continue
+        if len(elems) <= 2:
+            bar_fix_nodes[nid] = {0, 1, 2}
+            continue
+        dirs = []
+        for e in elems:
+            if len(e["nodes"]) != 2:
+                continue
+            other = e["nodes"][1] if e["nodes"][0] == nid else e["nodes"][0]
+            dirs.append(vec_normalize(vec_sub(nodes[other], nodes[nid])))
+        has_non_coplanar = False
+        for a in range(len(dirs)):
+            if has_non_coplanar:
+                break
+            for b in range(a + 1, len(dirs)):
+                normal = vec_cross(dirs[a], dirs[b])
+                if vec_norm(normal) < 1.0e-6:
+                    continue
+                normal = vec_normalize(normal)
+                for c in range(b + 1, len(dirs)):
+                    if abs(vec_dot(normal, dirs[c])) > 1.0e-3:
+                        has_non_coplanar = True
+                        break
+                if has_non_coplanar:
+                    break
+        if not has_non_coplanar:
+            bar_fix_nodes[nid] = {0, 1, 2}
+    print(f"  Bar-plane-fixed nodes: {len(bar_fix_nodes)}")
+
+    q4_bar_z_fix = set()
+    for nid, types in node_types.items():
+        if not ({1, 2} <= types) or 5 in types:
+            continue
+        max_dz = 0.0
+        for e in node_bar_elems.get(nid, []):
+            if len(e["nodes"]) != 2:
+                continue
+            other = e["nodes"][1] if e["nodes"][0] == nid else e["nodes"][0]
+            v = vec_sub(nodes[other], nodes[nid])
+            length = vec_norm(v)
+            if length > 1.0e-12:
+                max_dz = max(max_dz, abs(v[2]) / length)
+        if max_dz < 0.05:
+            q4_bar_z_fix.add(nid)
+
+    nodal_force = defaultdict(lambda: [0.0, 0.0, 0.0])
+    if data["gravity"]:
+        grav = data["gravity"][0]
+        mag = grav["magnitude"]
+        gx, gy, gz = grav["direction"]
+        for e in valid:
+            mat = data["materials"].get(e["material"], {"density": 2320.0, "E": 2.0e11, "nu": 0.3})
+            rho = mat.get("density", 2320.0)
+            mass = 0.0
+            if e["type"] == "S4R":
+                mass = polygon_area_xy(e["nodes"], nodes) * 0.2 * rho
+            elif e["type"] == "T3D2":
+                length = vec_norm(vec_sub(nodes[e["nodes"][1]], nodes[e["nodes"][0]]))
+                area = e["section"][0] if e["section"] else 0.25
+                mass = area * length * rho
+            elif e["type"] == "B31":
+                length = vec_norm(vec_sub(nodes[e["nodes"][1]], nodes[e["nodes"][0]]))
+                mass = 0.76 * length * rho
+            elif e["type"] == "C3D8R":
+                mass = hex_volume(e["nodes"], nodes) * rho
+            per_node = mass * mag / max(1, len(e["nodes"]))
+            for n in e["nodes"]:
+                nodal_force[n][0] += per_node * gx
+                nodal_force[n][1] += per_node * gy
+                nodal_force[n][2] += per_node * gz
+
+    load_entries = []
+    for nid in sorted(nodal_force):
+        for dof, val in enumerate(nodal_force[nid], start=1):
+            if abs(val) > 1.0e-10:
+                load_entries.append((nid, dof, val))
+
+    groups = defaultdict(list)
+    for e in valid:
+        groups[(stap_type(e["type"]), e["type"], e["material"])].append(e)
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("Bridge-1: Cable-stayed bridge (3D conversion)\n")
+        f.write(f"{len(nodes)}  {len(groups)}  1  1\n")
+        for nid in sorted(nodes):
+            bc = list(fixed.get(nid, [0, 0, 0]))
+            if nid in orphan_nodes:
+                bc = [1, 1, 1]
+            if nid in z_fix_nodes:
+                bc[2] = 1
+            if nid in bar_fix_nodes:
+                for dof in bar_fix_nodes[nid]:
+                    bc[dof] = 1
+            if nid in q4_bar_z_fix:
+                bc[2] = 1
+            x, y, z = nodes[nid]
+            f.write(f"  {nid}  {bc[0]}  {bc[1]}  {bc[2]}  {x:.6f}  {y:.6f}  {z:.6f}\n")
+
+        f.write(f"  1  {len(load_entries)}")
+        for nid, dof, val in load_entries:
+            f.write(f"  {nid}  {dof}  {val:.6e}")
+        f.write("\n")
+
+        for (st, abaqus_type, mat_name), elems in sorted(groups.items()):
+            mat = data["materials"].get(mat_name, {"E": 2.0e11, "nu": 0.3})
+            f.write(f"  {st}  {len(elems)}  1\n")
+            if st == 1:
+                area = 0.76 if abaqus_type == "B31" else 0.25
+                f.write(f"    1  {mat.get('E', 2.0e11):.6e}  {area:.6f}\n")
+            elif st == 2:
+                f.write(f"    1  {mat.get('E', 2.0e11):.6e}  {mat.get('nu', 0.3):.6f}  0.200000\n")
+            elif st == 5:
+                f.write(f"    1  {mat.get('E', 2.0e11):.6e}  {mat.get('nu', 0.3):.6f}\n")
+            for local_id, elem in enumerate(elems, start=1):
+                conn = "  ".join(str(n) for n in elem["nodes"])
+                f.write(f"    {local_id}  {conn}  1\n")
+        f.write("  0\n")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Convert Abaqus .inp to STAP++ .dat")
+    parser.add_argument("inp", nargs="?", default="Bridge-1.inp")
+    parser.add_argument("dat", nargs="?", default="Bridge-1.dat")
+    args = parser.parse_args()
+
+    print("Abaqus .inp -> STAP++ .dat converter")
+    print(f"  Input : {args.inp}")
+    print(f"  Output: {args.dat}")
+    data = parse_inp(args.inp)
+    print(f"  Parts: {len(data['parts'])}")
+    print(f"  Instances: {len(data['assembly'].get('instances', []))}")
+    print(f"  Materials: {len(data['materials'])}")
+    nodes, elements, node_map = flatten_assembly(data)
+    print(f"  Global nodes: {len(nodes)}")
+    print(f"  Global elements: {len(elements)}")
+    write_dat(args.dat, data, nodes, elements, node_map)
+    print("Done.")
+
+
+if __name__ == "__main__":
+    main()

@@ -90,7 +90,15 @@ void CElementGroup::CalculateMemberSize()
             ElementSize_ = sizeof(CPlate);
             MaterialSize_ = sizeof(CQ4Material);
             break;
-        default:
+        case ElementTypes::Beam3D:
+            ElementSize_ = sizeof(CBeam3D);
+            MaterialSize_ = sizeof(CBeam3DMaterial);
+            break;
+        case ElementTypes::Shell4:
+            ElementSize_ = sizeof(CShell4);
+            MaterialSize_ = sizeof(CQ4Material);
+            break;
+default:
             std::cerr << "Type " << ElementType_ << " not available. See CElementGroup::CalculateMemberSize." << std::endl;
             exit(5);
             break;
@@ -123,6 +131,12 @@ void CElementGroup::AllocateElements(std::size_t size)
         case ElementTypes::Plate:
             ElementList_ = new CPlate[size];
             break;
+        case ElementTypes::Beam3D:
+            ElementList_ = new CBeam3D[size];
+            break;
+        case ElementTypes::Shell4:
+            ElementList_ = new CShell4[size];
+            break;
         default:
             std::cerr << "Type " << ElementType_ << " not available. See CElementGroup::AllocateElement." << std::endl;
             exit(5);
@@ -142,6 +156,12 @@ void CElementGroup::AllocateMaterials(std::size_t size)
             break;
         case ElementTypes::H8:
             MaterialList_ = new CH8Material[size];
+            break;
+        case ElementTypes::Beam3D:
+            MaterialList_ = new CBeam3DMaterial[size];
+            break;
+        case ElementTypes::Shell4:
+            MaterialList_ = new CQ4Material[size];
             break;
         case ElementTypes::Q4:
         case ElementTypes::Q4R:

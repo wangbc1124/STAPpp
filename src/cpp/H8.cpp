@@ -88,14 +88,103 @@ void CH8::ElementStiffness(double* Matrix)
 		z[i] = nodes_[i]->XYZ[2];
 	}
 
-	// 2x2x2 Gauss quadrature
-	double gp = 1.0 / sqrt(3.0);
-	double gauss_pts[2] = {-gp, gp};
-
+	// Single-point integration at center for reduced integration stiffness
+	// B0 at center (xi=eta=zeta=0): shape function derivatives
 	double K[24][24];
 	for (int i = 0; i < 24; i++)
 		for (int j = 0; j < 24; j++)
 			K[i][j] = 0.0;
+
+	double B0[6][24];
+	for (int i = 0; i < 6; i++)
+		for (int j = 0; j < 24; j++)
+			B0[i][j] = 0.0;
+
+	{
+		double dNdxi0[8], dNdeta0[8], dNdzeta0[8];
+		for (int n = 0; n < 8; n++)
+		{
+			dNdxi0[n]   = 0.125 * xi[n];
+			dNdeta0[n]  = 0.125 * eta[n];
+			dNdzeta0[n] = 0.125 * zeta[n];
+		}
+
+		double J0[3][3];
+		for (int i = 0; i < 3; i++)
+			for (int j = 0; j < 3; j++)
+				J0[i][j] = 0.0;
+
+		for (int n = 0; n < 8; n++)
+		{
+			J0[0][0] += dNdxi0[n] * x[n];   J0[0][1] += dNdxi0[n] * y[n];   J0[0][2] += dNdxi0[n] * z[n];
+			J0[1][0] += dNdeta0[n] * x[n];  J0[1][1] += dNdeta0[n] * y[n];  J0[1][2] += dNdeta0[n] * z[n];
+			J0[2][0] += dNdzeta0[n] * x[n]; J0[2][1] += dNdzeta0[n] * y[n]; J0[2][2] += dNdzeta0[n] * z[n];
+		}
+
+		double detJ0 = J0[0][0] * (J0[1][1] * J0[2][2] - J0[1][2] * J0[2][1])
+		             - J0[0][1] * (J0[1][0] * J0[2][2] - J0[1][2] * J0[2][0])
+		             + J0[0][2] * (J0[1][0] * J0[2][1] - J0[1][1] * J0[2][0]);
+
+		// Only use 1-pt stiffness if Jacobian is well-conditioned
+		if (detJ0 > 1e-15) {
+
+		double inv_det0 = 1.0 / detJ0;
+		double invJ0[3][3];
+		invJ0[0][0] =  (J0[1][1] * J0[2][2] - J0[1][2] * J0[2][1]) * inv_det0;
+		invJ0[0][1] = -(J0[0][1] * J0[2][2] - J0[0][2] * J0[2][1]) * inv_det0;
+		invJ0[0][2] =  (J0[0][1] * J0[1][2] - J0[0][2] * J0[1][1]) * inv_det0;
+		invJ0[1][0] = -(J0[1][0] * J0[2][2] - J0[1][2] * J0[2][0]) * inv_det0;
+		invJ0[1][1] =  (J0[0][0] * J0[2][2] - J0[0][2] * J0[2][0]) * inv_det0;
+		invJ0[1][2] = -(J0[0][0] * J0[1][2] - J0[0][2] * J0[1][0]) * inv_det0;
+		invJ0[2][0] =  (J0[1][0] * J0[2][1] - J0[1][1] * J0[2][0]) * inv_det0;
+		invJ0[2][1] = -(J0[0][0] * J0[2][1] - J0[0][1] * J0[2][0]) * inv_det0;
+		invJ0[2][2] =  (J0[0][0] * J0[1][1] - J0[0][1] * J0[1][0]) * inv_det0;
+
+		double dNdx0[8], dNdy0[8], dNdz0[8];
+		for (int n = 0; n < 8; n++)
+		{
+			dNdx0[n] = invJ0[0][0] * dNdxi0[n] + invJ0[0][1] * dNdeta0[n] + invJ0[0][2] * dNdzeta0[n];
+			dNdy0[n] = invJ0[1][0] * dNdxi0[n] + invJ0[1][1] * dNdeta0[n] + invJ0[1][2] * dNdzeta0[n];
+			dNdz0[n] = invJ0[2][0] * dNdxi0[n] + invJ0[2][1] * dNdeta0[n] + invJ0[2][2] * dNdzeta0[n];
+		}
+
+		for (int n = 0; n < 8; n++)
+		{
+			int col = 3 * n;
+			B0[0][col]   = dNdx0[n];
+			B0[1][col+1] = dNdy0[n];
+			B0[2][col+2] = dNdz0[n];
+			B0[3][col]   = dNdy0[n]; B0[3][col+1] = dNdx0[n];
+			B0[4][col+1] = dNdz0[n]; B0[4][col+2] = dNdy0[n];
+			B0[5][col]   = dNdz0[n]; B0[5][col+2] = dNdx0[n];
+		}
+
+		// 1-pt stiffness: K1 = B0^T * D * B0 * 8*detJ0 (weight=8 for whole element)
+		double DB0[6][24];
+		for (int i = 0; i < 6; i++)
+			for (int j = 0; j < 24; j++) {
+				DB0[i][j] = 0.0;
+				for (int m = 0; m < 6; m++)
+					DB0[i][j] += D[i][m] * B0[m][j];
+			}
+
+		for (int i = 0; i < 24; i++)
+			for (int j = i; j < 24; j++) {
+				double val = 0.0;
+				for (int m = 0; m < 6; m++)
+					val += B0[m][i] * DB0[m][j];
+				K[i][j] += val * detJ0 * 8.0;
+			}
+		}  // detJ0 > 1e-15
+	}
+
+	// 2x2x2 Gauss quadrature — K_full for hourglass stabilization
+	double gp = 1.0 / sqrt(3.0);
+	double gauss_pts[2] = {-gp, gp};
+	double K_full[24][24];
+	for (int i = 0; i < 24; i++)
+		for (int j = 0; j < 24; j++)
+			K_full[i][j] = 0.0;
 
 	for (int gi = 0; gi < 2; gi++)
 	{
@@ -182,7 +271,7 @@ void CH8::ElementStiffness(double* Matrix)
 					B[5][col+2] = dNdx[n];
 				}
 
-				// K += B^T * D * B * detJ (weight=1 at each Gauss point)
+				// K_full += B^T * D * B * detJ (weight=1 at each Gauss point)
 				double DB[6][24];
 				for (int i = 0; i < 6; i++)
 					for (int j = 0; j < 24; j++)
@@ -198,10 +287,47 @@ void CH8::ElementStiffness(double* Matrix)
 						double val = 0.0;
 						for (int m = 0; m < 6; m++)
 							val += B[m][i] * DB[m][j];
-						K[i][j] += val * detJ;
+						K_full[i][j] += val * detJ;
 					}
 			}
 		}
+	}
+
+	// Combine: K = K_1pt + alpha * (K_full - K_1pt)
+	// Only use reduced integration if 1-pt stiffness is well-conditioned
+	// Adaptive stabilization: slender elements get reduced alpha
+	// Estimate aspect ratio from node coordinate ranges
+	double xmin = x[0], xmax = x[0], ymin = y[0], ymax = y[0], zmin = z[0], zmax = z[0];
+	for (int n = 1; n < 8; n++) {
+		if (x[n] < xmin) xmin = x[n]; if (x[n] > xmax) xmax = x[n];
+		if (y[n] < ymin) ymin = y[n]; if (y[n] > ymax) ymax = y[n];
+		if (z[n] < zmin) zmin = z[n]; if (z[n] > zmax) zmax = z[n];
+	}
+	double dx = xmax - xmin, dy = ymax - ymin, dz = zmax - zmin;
+	double hmax = fmax(fmax(dx, dy), dz);
+	double hmin = fmin(fmin(dx, dy), dz);
+	double aspect = (hmin > 1e-20) ? hmax / hmin : 1.0;
+
+	double alpha_base = 0.05;
+	double alpha = alpha_base;
+	if (aspect > 3.0) {
+		alpha = alpha_base * 3.0 / aspect;
+		if (alpha < 0.03) alpha = 0.03;
+	}
+	double sum_diag_1pt = 0.0, sum_diag_full = 0.0;
+	for (int i = 0; i < 24; i++) {
+		sum_diag_1pt += fabs(K[i][i]);
+		sum_diag_full += fabs(K_full[i][i]);
+	}
+	if (sum_diag_1pt > 1e-10 && sum_diag_full > 1e-10) {
+		for (int i = 0; i < 24; i++)
+			for (int j = i; j < 24; j++)
+				K[i][j] = K[i][j] + alpha * (K_full[i][j] - K[i][j]);
+	} else {
+		// Fall back to full integration for degenerate elements
+		for (int i = 0; i < 24; i++)
+			for (int j = i; j < 24; j++)
+				K[i][j] = K_full[i][j];
 	}
 
 	// Copy upper-triangular K to column-by-column storage

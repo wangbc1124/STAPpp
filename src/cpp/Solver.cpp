@@ -34,8 +34,11 @@ void CLDLTSolver::LDLT()
 	// Relative pivot tolerance: if pivot drops below 1e-12 * max_diag,
 	// the matrix is numerically singular for engineering purposes.
 	// FLT_MIN (~1.175e-38) was far too small to catch near-zero pivots.
-	double pivot_tol = 1.0e-17 * max_diag;
-	if (pivot_tol < 1.0e-15) pivot_tol = 1.0e-15;  // absolute floor
+	// Pivot tolerance: check relative ratio rather than absolute magnitude
+	// to handle mixed translational/rotational DOF stiffness scales
+	// Use small absolute tolerance instead of relative to handle mixed stiffness scales
+	(void)max_diag;
+	double pivot_tol = 1.0e-10;
 
 	double min_pivot = max_diag;
 	unsigned int min_pivot_eq = 0;

@@ -20,6 +20,8 @@
 #include "Beam.h"
 #include "H8.h"
 #include "Plate.h"
+#include "Beam3D.h"
+#include "Shell4.h"
 #include "Material.h"
 #include "Node.h"
 
@@ -36,7 +38,9 @@ enum ElementTypes
     H8,     // 8H element
     Beam,   // Beam element
     Plate,  // Plate element
-    Shell   // Shell elment
+    Shell,  // Shell element
+    Beam3D, // 3D Beam element
+    Shell4  // 4-node flat shell element (membrane + plate bending)
 };
 
 //! Element group class

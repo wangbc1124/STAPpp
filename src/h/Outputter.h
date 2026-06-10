@@ -71,6 +71,12 @@ public:
 //! Output Plate element data
 	void OutputPlateElements(unsigned int EleGrp);
 
+//! Output Beam3D element data
+	void OutputBeam3DElements(unsigned int EleGrp);
+
+//! Output Shell4 element data
+	void OutputShell4Elements(unsigned int EleGrp);
+
 //!	Output load data 
 	void OutputLoadInfo(); 
 
