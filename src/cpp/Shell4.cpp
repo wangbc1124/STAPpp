@@ -376,6 +376,27 @@ void CShell4::ElementStiffness(double* Matrix)
 				double val = (Bs[0][i]*Bs[0][j] + Bs[1][i]*Bs[1][j]) * Ds;
 				K[i][j] += val * detJ * 4.0;  // weight=4 for 1-pt quadrature over 2x2 area
 			}
+
+		// S4R-equivalent hourglass control for the transverse shear part.
+		// The one-point shear integration leaves the alternating transverse
+		// displacement mode almost unstiffened; Abaqus S4R adds stabilization.
+		double hx[4] = {1.0, -1.0, 1.0, -1.0};
+		double lx = 0.5 * (sqrt((xloc[1]-xloc[0])*(xloc[1]-xloc[0]) + (yloc[1]-yloc[0])*(yloc[1]-yloc[0])) +
+		                   sqrt((xloc[2]-xloc[3])*(xloc[2]-xloc[3]) + (yloc[2]-yloc[3])*(yloc[2]-yloc[3])));
+		double ly = 0.5 * (sqrt((xloc[3]-xloc[0])*(xloc[3]-xloc[0]) + (yloc[3]-yloc[0])*(yloc[3]-yloc[0])) +
+		                   sqrt((xloc[2]-xloc[1])*(xloc[2]-xloc[1]) + (yloc[2]-yloc[1])*(yloc[2]-yloc[1])));
+		double h2 = 0.5 * (lx * lx + ly * ly);
+		if (h2 > 1.0e-20) {
+			const double hg_alpha = 0.0006;
+			double k_hg = hg_alpha * Ds * detJ * 4.0 / h2;
+			for (int a = 0; a < 4; ++a) {
+				int ia = 6 * a + 2;
+				for (int b = a; b < 4; ++b) {
+					int ib = 6 * b + 2;
+					K[ia][ib] += k_hg * hx[a] * hx[b];
+				}
+			}
+		}
 	}
 
 	// --- 4d. Drilling DOF stabilization ---

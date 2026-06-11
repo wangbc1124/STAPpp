@@ -151,10 +151,13 @@ void COutputter::OutputElementInfo()
 			  << "     EQ.2, FOUR-NODE PLANE ELEMENTS (FULL INTEGRATION)" << endl
 			  << "     EQ.3, FOUR-NODE PLANE ELEMENTS (REDUCED INTEGRATION)" << endl
 			  << "     EQ.4, THREE-NODE TRIANGULAR PLANE ELEMENTS (CST)" << endl
-			  << "     EQ.5, EIGHT-NODE HEXAHEDRAL ELEMENTS" << endl
-			  << "     EQ.6, TWO-NODE BEAM ELEMENTS" << endl
-			  << "     EQ.7, FOUR-NODE PLATE BENDING ELEMENTS" << endl
-			  << endl;
+		  << "     EQ.5, EIGHT-NODE HEXAHEDRAL ELEMENTS" << endl
+		  << "     EQ.6, TWO-NODE BEAM ELEMENTS" << endl
+		  << "     EQ.7, FOUR-NODE PLATE BENDING ELEMENTS" << endl
+		  << "     EQ.9, TWO-NODE 3D EULER-BERNOULLI BEAM ELEMENTS" << endl
+		  << "     EQ.10, FOUR-NODE FLAT SHELL ELEMENTS" << endl
+		  << "     EQ.11, TWO-NODE 3D TIMOSHENKO BEAM ELEMENTS" << endl
+		  << endl;
 
 		*this << " NUMBER OF ELEMENTS. . . . . . . . . . .( NPAR(2) ) . . =" << setw(5) << NUME
 			  << endl
@@ -201,6 +204,11 @@ void COutputter::OutputElementInfo()
 		    case ElementTypes::Shell4: // Shell4 element
 		    {
 		        OutputShell4Elements(EleGrp);
+		        break;
+		    }
+		    case ElementTypes::Beam3DTimoshenko: // Beam3DTimoshenko element
+		    {
+		        OutputBeam3DTimoshenkoElements(EleGrp);
 		        break;
 		    }
 		    default:
@@ -494,6 +502,7 @@ void COutputter::OutputElementStress()
 			}
 
 			case ElementTypes::Beam3D: // Beam3D element (3D Euler-Bernoulli beam)
+			case ElementTypes::Beam3DTimoshenko: // Beam3DTimoshenko element (3D Timoshenko beam)
 			{
 				*this << "  ELEMENT        AXIAL-FORCE       MOMENT-Y1        MOMENT-Z1" << endl
 					<< "                    TORQUE1       AXIAL-STRESS       MOMENT-Y2" << endl
@@ -676,6 +685,51 @@ void COutputter::OutputBeam3DElements(unsigned int EleGrp)
 		  << " NUMBER     MODULUS      RATIO" << endl
 		  << "               E          NU           A" << endl
 		  << "                    Iy              Iz               J" << endl
+		  << "                    n1_x            n1_y            n1_z" << endl;
+
+	*this << setiosflags(ios::scientific) << setprecision(5);
+
+	for (unsigned int mset = 0; mset < NUMMAT; mset++)
+	{
+		*this << setw(5) << mset + 1;
+		ElementGroup.GetMaterial(mset).Write(*this);
+	}
+
+	*this << endl << endl
+		  << " E L E M E N T   I N F O R M A T I O N" << endl;
+	*this << " ELEMENT     NODE     NODE       MATERIAL" << endl
+		  << " NUMBER-N      I        J       SET NUMBER" << endl;
+
+	unsigned int NUME = ElementGroup.GetNUME();
+
+	for (unsigned int Ele = 0; Ele < NUME; Ele++)
+	{
+		*this << setw(5) << Ele + 1;
+		ElementGroup[Ele].Write(*this);
+	}
+
+	*this << endl;
+}
+
+//	Output Shell4 element data
+void COutputter::OutputBeam3DTimoshenkoElements(unsigned int EleGrp)
+{
+	CDomain* FEMData = CDomain::GetInstance();
+
+	CElementGroup& ElementGroup = FEMData->GetEleGrpList()[EleGrp];
+	unsigned int NUMMAT = ElementGroup.GetNUMMAT();
+
+	*this << " M A T E R I A L   D E F I N I T I O N" << endl
+		  << endl;
+	*this << " NUMBER OF DIFFERENT SETS OF MATERIAL" << endl;
+	*this << " AND SECTION CONSTANTS  . . . . . . .( NPAR(3) ) . . =" << setw(5) << NUMMAT
+		  << endl << endl;
+
+	*this << "  SET       YOUNG'S    POISSON'S       AREA" << endl
+		  << " NUMBER     MODULUS      RATIO" << endl
+		  << "               E          NU           A" << endl
+		  << "                    Iy              Iz               J" << endl
+		  << "                   Asy             Asz" << endl
 		  << "                    n1_x            n1_y            n1_z" << endl;
 
 	*this << setiosflags(ios::scientific) << setprecision(5);

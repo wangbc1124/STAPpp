@@ -98,6 +98,10 @@ void CElementGroup::CalculateMemberSize()
             ElementSize_ = sizeof(CShell4);
             MaterialSize_ = sizeof(CQ4Material);
             break;
+        case ElementTypes::Beam3DTimoshenko:
+            ElementSize_ = sizeof(CBeam3DTimoshenko);
+            MaterialSize_ = sizeof(CBeam3DTimoshenkoMaterial);
+            break;
 default:
             std::cerr << "Type " << ElementType_ << " not available. See CElementGroup::CalculateMemberSize." << std::endl;
             exit(5);
@@ -137,6 +141,9 @@ void CElementGroup::AllocateElements(std::size_t size)
         case ElementTypes::Shell4:
             ElementList_ = new CShell4[size];
             break;
+        case ElementTypes::Beam3DTimoshenko:
+            ElementList_ = new CBeam3DTimoshenko[size];
+            break;
         default:
             std::cerr << "Type " << ElementType_ << " not available. See CElementGroup::AllocateElement." << std::endl;
             exit(5);
@@ -159,6 +166,9 @@ void CElementGroup::AllocateMaterials(std::size_t size)
             break;
         case ElementTypes::Beam3D:
             MaterialList_ = new CBeam3DMaterial[size];
+            break;
+        case ElementTypes::Beam3DTimoshenko:
+            MaterialList_ = new CBeam3DTimoshenkoMaterial[size];
             break;
         case ElementTypes::Shell4:
             MaterialList_ = new CQ4Material[size];

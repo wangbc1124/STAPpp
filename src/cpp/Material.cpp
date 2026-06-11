@@ -89,6 +89,25 @@ void CBeam3DMaterial::Write(COutputter& output)
 		   << setw(16) << n1[0] << setw(16) << n1[1] << setw(16) << n1[2] << endl;
 }
 
+//	Read Beam3DTimoshenko material data from stream Input
+bool CBeam3DTimoshenkoMaterial::Read(ifstream& Input)
+{
+	Input >> nset;
+	Input >> E >> Nu >> Area >> Iy >> Iz >> J >> Asy >> Asz;
+	Input >> n1[0] >> n1[1] >> n1[2];
+
+	return true;
+}
+
+//	Write Beam3DTimoshenko material data to Stream
+void CBeam3DTimoshenkoMaterial::Write(COutputter& output)
+{
+	output << setw(16) << E << setw(16) << Nu << setw(16) << Area
+		   << setw(16) << Iy << setw(16) << Iz << setw(16) << J
+		   << setw(16) << Asy << setw(16) << Asz
+		   << setw(16) << n1[0] << setw(16) << n1[1] << setw(16) << n1[2] << endl;
+}
+
 //	Write material data to Stream
 void CQ4Material::Write(COutputter& output)
 {

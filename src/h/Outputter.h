@@ -74,6 +74,9 @@ public:
 //! Output Beam3D element data
 	void OutputBeam3DElements(unsigned int EleGrp);
 
+//! Output Beam3DTimoshenko element data
+	void OutputBeam3DTimoshenkoElements(unsigned int EleGrp);
+
 //! Output Shell4 element data
 	void OutputShell4Elements(unsigned int EleGrp);
 

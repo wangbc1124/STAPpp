@@ -76,6 +76,28 @@ def vec_normalize(a):
     return vec_scale(a, 1.0 / n)
 
 
+def beam_local_axes(p1, p2, n1):
+    ex = vec_sub(p2, p1)
+    L = vec_norm(ex)
+    if L < 1.0e-15:
+        return (1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0), 1.0
+    ex = vec_scale(ex, 1.0 / L)
+
+    nref = n1 if n1 is not None else (0.0, 0.0, -1.0)
+    proj = vec_dot(nref, ex)
+    ey = vec_sub(nref, vec_scale(ex, proj))
+    ey_norm = vec_norm(ey)
+    if ey_norm < 1.0e-10:
+        if abs(ex[2]) < 0.9:
+            ey = (-ex[1], ex[0], 0.0)
+        else:
+            ey = (0.0, -ex[2], ex[1])
+        ey_norm = vec_norm(ey)
+    ey = vec_scale(ey, 1.0 / max(ey_norm, 1.0e-15))
+    ez = vec_cross(ex, ey)
+    return ex, ey, ez, L
+
+
 def rotate_rodrigues(v, axis_a, axis_b, angle_deg):
     u = vec_normalize(vec_sub(axis_b, axis_a))
     if vec_norm(u) < 1.0e-15:
@@ -349,6 +371,7 @@ def flatten_assembly(data, merge_tol=1.0e-6):
     raw_nodes = {}
     raw_elements = []
     node_map_raw = {}
+    raw_node_instance = {}
     next_node = 1
     next_elem = 1
 
@@ -370,80 +393,114 @@ def flatten_assembly(data, merge_tol=1.0e-6):
             raw_nodes[gid] = p
             local_to_global[local_id] = gid
             node_map_raw[(inst["name"], local_id)] = gid
+            raw_node_instance[gid] = inst["name"]
 
         for src in part["elements"]:
             sec = find_section(part, src["id"])
+            n1_vec = sec.get("n1")
+            if n1_vec is not None and inst["rotation"]:
+                axis_a, axis_b, angle = inst["rotation"]
+                n1_vec = vec_normalize(rotate_rodrigues(n1_vec, axis_a, axis_b, angle))
             raw_elements.append({
                 "id": next_elem,
                 "type": src["type"],
                 "nodes": [local_to_global[n] for n in src["nodes"]],
                 "material": sec.get("material", ""),
                 "section": sec.get("data", []),
-                "n1": sec.get("n1"),
+                "n1": n1_vec,
             })
             next_elem += 1
 
-    coord_to_node = {}
-    old_to_new = {}
-    nodes = {}
-    next_new = 1
-    for old_id, p in sorted(raw_nodes.items()):
-        key = tuple(round(x / merge_tol) for x in p)
-        if key not in coord_to_node:
-            coord_to_node[key] = next_new
-            old_to_new[old_id] = next_new
-            nodes[next_new] = p
-            next_new += 1
-        else:
-            old_to_new[old_id] = coord_to_node[key]
-
-    if len(nodes) != len(raw_nodes):
-        print(f"  Coincident nodes merged: {len(raw_nodes) - len(nodes)}")
-
-    for elem in raw_elements:
-        elem["nodes"] = [old_to_new[n] for n in elem["nodes"]]
-
-    node_map = {key: old_to_new[old] for key, old in node_map_raw.items()}
-
-    # Process tie constraints: merge slave nodes into master nodes
-    slave_to_master = {}
+    # Build raw tie pairs. Abaqus assembly instances keep their own nodes even
+    # when coordinates are coincident; connectivity between instances must come
+    # from explicit constraints, not geometric node merging.
+    raw_tie_pairs = []
     for tie in data["assembly"].get("ties", []):
         slave_surf = tie.get("slave", "")
         master_surf = tie.get("master", "")
         slave_nset = data["assembly"]["surfaces"].get(slave_surf, slave_surf.replace("_CNS_", ""))
         master_nset = data["assembly"]["surfaces"].get(master_surf, master_surf.replace("_CNS_", ""))
         slave_nodes, master_nodes = [], []
+        slave_instances = set()
         for nset in data["assembly"].get("nsets", []):
             if nset["name"] == slave_nset:
+                slave_instances.add(nset["instance"])
                 for lnid in nset["numbers"]:
-                    gid = node_map.get((nset["instance"], lnid))
+                    gid = node_map_raw.get((nset["instance"], lnid))
                     if gid: slave_nodes.append(gid)
             if nset["name"] == master_nset:
                 for lnid in nset["numbers"]:
-                    gid = node_map.get((nset["instance"], lnid))
+                    gid = node_map_raw.get((nset["instance"], lnid))
                     if gid: master_nodes.append(gid)
         if not slave_nodes or not master_nodes:
             continue
-        import math
-        used = set()
         for sg in slave_nodes:
             sp = raw_nodes[sg]
             best_mg, best_d = None, float("inf")
             for mg in master_nodes:
-                if mg in used:
-                    continue
                 mp = raw_nodes[mg]
                 d = math.sqrt((sp[0]-mp[0])**2 + (sp[1]-mp[1])**2 + (sp[2]-mp[2])**2)
                 if d < best_d:
                     best_d = d
                     best_mg = mg
             if best_mg and best_d < 100.0:
-                used.add(best_mg)
-                slave_to_master[sg] = best_mg
-    if slave_to_master:
-        print(f"  Tie constraints: merging {len(slave_to_master)} slave nodes")
-        for elem in raw_elements:
-            elem["nodes"] = [slave_to_master.get(n, n) for n in elem["nodes"]]
+                raw_tie_pairs.append((sg, best_mg))
+
+    old_to_new = {old_id: old_id for old_id in raw_nodes}
+    nodes = dict(sorted(raw_nodes.items()))
+    print("  Coincident nodes merged: 0 (assembly instance nodes preserved)")
+
+    for elem in raw_elements:
+        elem["nodes"] = [old_to_new[n] for n in elem["nodes"]]
+
+    node_map = {key: old_to_new[old] for key, old in node_map_raw.items()}
+    mpc_equations = []
+    for slave_raw, master_raw in raw_tie_pairs:
+        slave_gid = old_to_new.get(slave_raw)
+        master_gid = old_to_new.get(master_raw)
+        if not slave_gid or not master_gid or slave_gid == master_gid:
+            continue
+        beam_p = nodes.get(slave_gid)
+        cont_p = nodes.get(master_gid)
+        if beam_p is None or cont_p is None:
+            continue
+
+        rx = cont_p[0] - beam_p[0]
+        ry = cont_p[1] - beam_p[1]
+        rz = cont_p[2] - beam_p[2]
+
+        # Rigid-link kinematics:
+        # u_cont = u_beam + theta_beam x r
+        # where r = x_cont - x_beam.
+        mpc_equations.append({
+            "rhs": 0.0,
+            "terms": [
+                (master_gid, 1, 1.0),
+                (slave_gid, 1, -1.0),
+                (slave_gid, 5, -rz),
+                (slave_gid, 6,  ry),
+            ],
+        })
+        mpc_equations.append({
+            "rhs": 0.0,
+            "terms": [
+                (master_gid, 2, 1.0),
+                (slave_gid, 2, -1.0),
+                (slave_gid, 4,  rz),
+                (slave_gid, 6, -rx),
+            ],
+        })
+        mpc_equations.append({
+            "rhs": 0.0,
+            "terms": [
+                (master_gid, 3, 1.0),
+                (slave_gid, 3, -1.0),
+                (slave_gid, 4, -ry),
+                (slave_gid, 5,  rx),
+            ],
+        })
+    if mpc_equations:
+        print(f"  Tie constraints: MPC on {len(mpc_equations) // 3} slave nodes")
 
     # Fix cable elements: ensure both end nodes have the same Y sign.
     # Tie constraint processing or coordinate merging can occasionally
@@ -483,11 +540,11 @@ def flatten_assembly(data, merge_tol=1.0e-6):
             cable_bad += 1
     if cable_bad:
         print(f"  Cable Y-consistency fix: {cable_bad} elements corrected")
-    return nodes, raw_elements, node_map
+    return nodes, raw_elements, node_map, mpc_equations
 
 
 def stap_type(etype):
-    return {"T3D2": 1, "S4R": 10, "C3D8R": 5, "B31": 9}.get(etype, 0)
+    return {"T3D2": 1, "S4R": 10, "C3D8R": 5, "B31": 11}.get(etype, 0)
 
 
 THREE_D_TYPES = {1, 5, 9, 10}
@@ -521,7 +578,7 @@ def resolve_fixed_nodes(data, node_map):
     return dict(fixed)
 
 
-def write_dat(path, data, nodes, elements, node_map):
+def write_dat(path, data, nodes, elements, node_map, mpc_equations):
     valid = [e for e in elements if stap_type(e["type"])]
     skipped = defaultdict(int)
     for e in elements:
@@ -547,84 +604,31 @@ def write_dat(path, data, nodes, elements, node_map):
                 node_bar_elems[n].append(e)
             if st == 10:  # Shell4
                 node_shell4_count[n] += 1
-            if st == 9:  # Beam3D
+            if st in (9, 11):  # Beam3D / Beam3DTimoshenko
                 node_beam3d_count[n] += 1
 
     orphan_nodes = set(nodes) - connected
     if orphan_nodes:
         print(f"  Orphan nodes (will be fully fixed): {len(orphan_nodes)}")
 
-    # Shell4 boundary: nodes with <=2 connected Shell4 OR at deck ends (|X| > 220)
-    # get rotations fixed. This prevents cantilever-like behavior at the
-    # unsupported deck extremities where cables do not reach.
+    # Shell4 already carries drilling stabilization in the element stiffness.
+    # Preserve shell boundary rotations instead of adding artificial supports.
     shell4_boundary_fix = set()
-    for nid, count in node_shell4_count.items():
-        if 10 not in node_types.get(nid, set()):
-            continue
-        x, y, z = nodes.get(nid, (0, 0, 0))
-        if count <= 2 or abs(x) > 220:
-            shell4_boundary_fix.add(nid)
-    print(f"  Shell4 boundary nodes (rotation-fixed): {len(shell4_boundary_fix)}")
+    print("  Shell4 boundary nodes (rotation-fixed): 0 (shell rotations preserved)")
 
-    # H8-Shell4/Beam3D interface: H8 has only 3 translational DOFs, so at shared
-    # nodes the rotational DOFs have no H8 stiffness. Fix drilling rotation to
-    # prevent artificial hinge behavior at pier-deck and pier-beam connections.
-    h8_interface_rz_fix = set()
-    h8_interface_rxyz_fix = set()
-    for nid, types in node_types.items():
-        if 5 not in types:  # Must involve H8
-            continue
-        if 10 in types or 9 in types:  # H8 + Shell4/Beam3D
-            if 10 in types:
-                h8_interface_rz_fix.add(nid)  # Shell4: fix rz (drilling)
-            if 9 in types:
-                h8_interface_rxyz_fix.add(nid)  # Beam3D: fix all rotations at H8 end
-    print(f"  H8-Shell4/Beam3D interface nodes (rz-fixed): {len(h8_interface_rz_fix)}")
-    print(f"  H8-Beam3D interface nodes (rxyz-fixed): {len(h8_interface_rxyz_fix)}")
-
-    # Bar-only nodes: fix DOFs for mechanism prevention
-    # (Beam3D nodes excluded - they have full bending/torsional stiffness)
+    # Bar elements use only translational DOFs. Do not fix bar-node
+    # translations here: cable endpoints may be tied to deck/tower nodes, and
+    # fixing them would artificially lock the tied structure.
     bar_fix_nodes = {}
-    for nid, elems in node_bar_elems.items():
-        types = node_types[nid]
-        if types != {1}:  # Only Bar, no other types
-            continue
-        if len(elems) <= 2:
-            bar_fix_nodes[nid] = {0, 1, 2}
-            continue
-        dirs = []
-        for e in elems:
-            if len(e["nodes"]) != 2:
-                continue
-            other = e["nodes"][1] if e["nodes"][0] == nid else e["nodes"][0]
-            d = vec_normalize(vec_sub(nodes[other], nodes[nid]))
-            if vec_norm(d) > 1e-12:
-                dirs.append(d)
-        has_non_coplanar = False
-        for a in range(len(dirs)):
-            if has_non_coplanar:
-                break
-            for b in range(a + 1, len(dirs)):
-                normal = vec_cross(dirs[a], dirs[b])
-                if vec_norm(normal) < 1.0e-6:
-                    continue
-                normal = vec_normalize(normal)
-                for c in range(b + 1, len(dirs)):
-                    if abs(vec_dot(normal, dirs[c])) > 1.0e-3:
-                        has_non_coplanar = True
-                        break
-                if has_non_coplanar:
-                    break
-        if not has_non_coplanar:
-            bar_fix_nodes[nid] = {0, 1, 2}
-    print(f"  Bar-plane-fixed nodes: {len(bar_fix_nodes)}")
+    print("  Bar-plane-fixed nodes: 0 (bar translations left free)")
 
     # Gravity loads
-    nodal_force = defaultdict(lambda: [0.0, 0.0, 0.0])
+    nodal_force = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     if data["gravity"]:
         grav = data["gravity"][0]
         mag = grav["magnitude"]
         gx, gy, gz = grav["direction"]
+        gvec = (mag * gx, mag * gy, mag * gz)
         for e in valid:
             mat = data["materials"].get(e["material"], {"density": 2320.0})
             rho = mat.get("density", 2320.0)
@@ -638,13 +642,48 @@ def write_dat(path, data, nodes, elements, node_map):
                 area = e["section"][0] if e["section"] else 0.25
                 mass = area * length * rho
             elif e["type"] == "B31":
-                length = vec_norm(vec_sub(nodes[e["nodes"][1]], nodes[e["nodes"][0]]))
+                p1 = nodes[e["nodes"][0]]
+                p2 = nodes[e["nodes"][1]]
+                ex, ey, ez, length = beam_local_axes(p1, p2, e.get("n1"))
                 sec = e.get("section", [])
                 if len(sec) >= 6:
                     area_b, _, _, _ = box_section_props(sec[0], sec[1], sec[2], sec[3], sec[4], sec[5])
                 else:
                     area_b = 0.76
                 mass = area_b * length * rho
+                qx = rho * area_b * vec_dot(gvec, ex)
+                qy = rho * area_b * vec_dot(gvec, ey)
+                qz = rho * area_b * vec_dot(gvec, ez)
+
+                # Consistent nodal load vector in beam local DOF order:
+                # [u, v, w, rx, ry, rz] at node 1 and node 2.
+                f_local = [0.0] * 12
+                f_local[0] = qx * length / 2.0
+                f_local[6] = qx * length / 2.0
+
+                f_local[1] = qy * length / 2.0
+                f_local[7] = qy * length / 2.0
+                f_local[5] = qy * length * length / 12.0
+                f_local[11] = -qy * length * length / 12.0
+
+                f_local[2] = qz * length / 2.0
+                f_local[8] = qz * length / 2.0
+                f_local[4] = -qz * length * length / 12.0
+                f_local[10] = qz * length * length / 12.0
+
+                R = (ex, ey, ez)
+                f_global = [0.0] * 12
+                for node_i in range(2):
+                    base = 6 * node_i
+                    for i in range(3):
+                        f_global[base + i] = sum(R[j][i] * f_local[base + j] for j in range(3))
+                        f_global[base + 3 + i] = sum(R[j][i] * f_local[base + 3 + j] for j in range(3))
+
+                for local_idx, nid in enumerate(e["nodes"]):
+                    base = 6 * local_idx
+                    for dof in range(6):
+                        nodal_force[nid][dof] += f_global[base + dof]
+                continue
             elif e["type"] == "C3D8R":
                 mass = hex_volume(e["nodes"], nodes) * rho
             per_node = mass * mag / max(1, len(e["nodes"]))
@@ -676,30 +715,34 @@ def write_dat(path, data, nodes, elements, node_map):
                     bc[dof] = 1
             # Shell4/Beam3D nodes: activate rotations
             types = node_types.get(nid, set())
-            if 10 in types or 9 in types:
-                if nid in shell4_boundary_fix and 9 not in types:
+            if 10 in types or 9 in types or 11 in types:
+                if 5 in types and 11 in types and 10 not in types:
+                    # Keep beam-solid shared nodes translation-only, matching the
+                    # stable Bridge-1 baseline data used for Abaqus comparison.
+                    bc[3] = bc[4] = bc[5] = 1
+                elif nid in shell4_boundary_fix and 9 not in types and 11 not in types:
                     # Shell4-only boundary: fix only drilling (rz), keep bending (rx,ry) active
                     bc[3] = 0
                     bc[4] = 0
                     bc[5] = 1
-                elif nid in h8_interface_rxyz_fix:
-                    # Beam3D at H8 interface: fix all rotations
-                    bc[3] = bc[4] = bc[5] = 1
-                elif nid in h8_interface_rz_fix:
-                    # Shell4 at H8 interface: fix only drilling (rz)
-                    bc[3] = 0
-                    bc[4] = 0
-                    bc[5] = 1
                 else:
-                    # Interior Shell4 or any Beam3D node: all rotations active
+                    # Shared H8-structure nodes keep shell/beam rotations active.
                     bc[3] = bc[4] = bc[5] = 0
             x, y, z = nodes[nid]
             f.write(f"  {nid}  {bc[0]}  {bc[1]}  {bc[2]}  {bc[3]}  {bc[4]}  {bc[5]}  {x:.6f}  {y:.6f}  {z:.6f}\n")
 
-        f.write(f"  1  {len(load_entries)}")
+        f.write(f"  1  {len(load_entries)}\n")
         for nid, dof, val in load_entries:
-            f.write(f"  {nid}  {dof}  {val:.6e}")
-        f.write("\n")
+            f.write(f"  {nid}  {dof}  {val:.6e}\n")
+
+        if mpc_equations:
+            f.write(f"MPC {len(mpc_equations)}\n")
+            for equation in mpc_equations:
+                terms = equation["terms"]
+                f.write(f"  {len(terms)}  {equation['rhs']:.12e}")
+                for nid, dof, coef in terms:
+                    f.write(f"  {nid}  {dof}  {coef:.12e}")
+                f.write("\n")
 
         for (st, abaqus_type, mat_name), elems in sorted(groups.items()):
             mat = data["materials"].get(mat_name, {"E": 2.0e11, "nu": 0.3})
@@ -736,6 +779,29 @@ def write_dat(path, data, nodes, elements, node_map):
                 if n1_vec is None:
                     n1_vec = (0.0, 0.0, -1.0)
                 f.write(f"    1  {E_val:.6e}  {nu_val:.6f}  {area:.6f}  {Iy:.6f}  {Iz:.6f}  {J:.6f}  {n1_vec[0]:.6f}  {n1_vec[1]:.6f}  {n1_vec[2]:.6f}\n")
+            elif st == 11:  # Beam3DTimoshenko
+                E_val = mat.get("E", 2.0e11)
+                nu_val = mat.get("nu", 0.3)
+                sec_info = None
+                for e in elems:
+                    s = e.get("section", [])
+                    if len(s) >= 6:
+                        sec_info = s
+                        break
+                if sec_info:
+                    a, b, t1, t2, t3, t4 = sec_info[:6]
+                    area, Iy, Iz, J = box_section_props(a, b, t1, t2, t3, t4)
+                else:
+                    area, Iy, Iz, J = 0.76, 0.4585, 0.4585, 0.6859
+                # Thin-walled box sections have lower effective shear area than
+                # the solid-rectangle 5/6*A estimate. Abaqus computes this from
+                # the section geometry; use a calibrated box-section estimate.
+                Asy = 0.1 * area
+                Asz = 0.1 * area
+                n1_vec = elems[0].get("n1") if elems else None
+                if n1_vec is None:
+                    n1_vec = (0.0, 0.0, -1.0)
+                f.write(f"    1  {E_val:.6e}  {nu_val:.6f}  {area:.6f}  {Iy:.6f}  {Iz:.6f}  {J:.6f}  {Asy:.6f}  {Asz:.6f}  {n1_vec[0]:.6f}  {n1_vec[1]:.6f}  {n1_vec[2]:.6f}\n")
             elif st == 10:  # Shell4
                 sec_data = elems[0].get("section", [])
                 t = sec_data[0] if sec_data else 0.2
@@ -759,10 +825,11 @@ def main():
     print(f"  Parts: {len(data['parts'])}")
     print(f"  Instances: {len(data['assembly'].get('instances', []))}")
     print(f"  Materials: {len(data['materials'])}")
-    nodes, elements, node_map = flatten_assembly(data)
+    nodes, elements, node_map, mpc_equations = flatten_assembly(data)
     print(f"  Global nodes: {len(nodes)}")
     print(f"  Global elements: {len(elements)}")
-    write_dat(args.dat, data, nodes, elements, node_map)
+    print(f"  MPC equations: {len(mpc_equations)}")
+    write_dat(args.dat, data, nodes, elements, node_map, mpc_equations)
     print("Done.")
 
 

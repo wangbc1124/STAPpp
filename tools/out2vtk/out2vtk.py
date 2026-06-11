@@ -18,6 +18,7 @@ Supports all element types:
   8  Shell  (4-node shell)
   9  Beam3D (2-node 3D beam)
   10 Shell4 (4-node flat shell, membrane + plate bending)
+  11 Beam3DTimoshenko (2-node B31-equivalent spatial beam)
 """
 
 import re
@@ -48,6 +49,9 @@ ELEM_DEF = {
                               'Moment_Z2','Torque2'],  3),
     10: (VTK_QUAD,        4, ['Sigma_X','Sigma_Y','Tau_XY',
                               'Mx','My','Mxy','Qx','Qy'],  3),
+    11: (VTK_LINE,        2, ['Axial_Force','Moment_Y1','Moment_Z1',
+                              'Torque1','Axial_Stress','Moment_Y2',
+                              'Moment_Z2','Torque2'],  3),
 }
 
 
@@ -80,6 +84,7 @@ def parse_out(filepath):
         'elements': [],
         'elem_group_types': [],
         'elem_type_by_group': [],  # one entry per group (may have duplicates)
+        'elem_count_by_group': [],
         'displacements': [],
         'stresses': [],
     }
@@ -177,7 +182,8 @@ def _parse_element_group(lines, start, result, prev_elem_type):
                 num_elems = int(m.group(1))
 
         if _has_kw(line, 'ELEMENT', 'INFORMATION') and elem_type is not None:
-            i = _parse_element_info(lines, i, elem_type, num_elems, result)
+            i, parsed_count = _parse_element_info(lines, i, elem_type, num_elems, result)
+            result['elem_count_by_group'].append(parsed_count)
 
         i += 1
 
@@ -187,7 +193,7 @@ def _parse_element_group(lines, start, result, prev_elem_type):
 def _parse_element_info(lines, start, elem_type, num_elems, result):
     """Parse element connectivity table."""
     if elem_type not in ELEM_DEF:
-        return start
+        return start, 0
 
     _, nodes_per_elem, _, _ = ELEM_DEF[elem_type]
     expected_nums = 1 + nodes_per_elem + 1
@@ -196,7 +202,11 @@ def _parse_element_info(lines, start, elem_type, num_elems, result):
     parsed = 0
     while i < len(lines) and parsed < num_elems:
         nums = _find_numbers(lines[i])
-        if len(nums) >= expected_nums:
+        if nums and int(nums[0]) == parsed + 1:
+            while len(nums) < expected_nums and i + 1 < len(lines):
+                i += 1
+                nums += _find_numbers(lines[i])
+        if len(nums) >= expected_nums and int(nums[0]) == parsed + 1:
             node_ids = [int(v) - 1 for v in nums[1:1 + nodes_per_elem]]
             mat_id = int(nums[1 + nodes_per_elem])
             result['elements'].append({
@@ -206,7 +216,7 @@ def _parse_element_info(lines, start, elem_type, num_elems, result):
             })
             parsed += 1
         i += 1
-    return i
+    return i, parsed
 
 
 def _parse_displacements(lines, start, result):
@@ -407,6 +417,10 @@ def write_vtk(result, outpath):
             f.write('LOOKUP_TABLE default\n')
             for e in elements:
                 f.write(f'  {e["type"]}\n')
+            f.write('SCALARS Material int 1\n')
+            f.write('LOOKUP_TABLE default\n')
+            for e in elements:
+                f.write(f'  {e["material"]}\n')
 
         # ── Cell data: stresses (per-group) ──
         if has_stress:
@@ -422,6 +436,7 @@ def _write_stress_data(f, result, num_cells, header_already_written=False):
     groups that don't have a given component.
     """
     etypes = result.get('elem_type_by_group', [])
+    counts = result.get('elem_count_by_group', [])
 
     # Build a map: cell_index -> stress_values_list (by group)
     # and collect all unique stress names in order
@@ -462,8 +477,10 @@ def _write_stress_data(f, result, num_cells, header_already_written=False):
                     if j < len(values):
                         cell_stress[global_idx][name] = values[j]
 
-        # Advance offset by the size of this stress block (0-indexed keys)
-        offset += max(stress_dict.keys()) + 1 if stress_dict else 0
+        if gidx < len(counts):
+            offset += counts[gidx]
+        else:
+            offset += max(stress_dict.keys()) + 1 if stress_dict else 0
 
     for name in all_names:
         f.write(f'SCALARS {name} float 1\n')
@@ -471,6 +488,39 @@ def _write_stress_data(f, result, num_cells, header_already_written=False):
         for ci in range(num_cells):
             v = cell_stress[ci].get(name, 0.0)
             f.write(f'  {v:14.6e}\n')
+
+    f.write('SCALARS Von_Mises float 1\n')
+    f.write('LOOKUP_TABLE default\n')
+    for ci in range(num_cells):
+        f.write(f'  {_von_mises(cell_stress[ci]):14.6e}\n')
+
+    f.write('TENSORS StressTensor float\n')
+    for ci in range(num_cells):
+        sx, sy, sz, txy, tyz, tzx = _stress_tensor_components(cell_stress[ci])
+        f.write(f'  {sx:14.6e} {txy:14.6e} {tzx:14.6e}\n')
+        f.write(f'  {txy:14.6e} {sy:14.6e} {tyz:14.6e}\n')
+        f.write(f'  {tzx:14.6e} {tyz:14.6e} {sz:14.6e}\n')
+
+
+def _stress_tensor_components(stress):
+    """Return sx, sy, sz, txy, tyz, tzx with sensible fallbacks."""
+    if 'Sigma_X' in stress or 'Sigma_Y' in stress or 'Sigma_Z' in stress:
+        return (
+            stress.get('Sigma_X', 0.0),
+            stress.get('Sigma_Y', 0.0),
+            stress.get('Sigma_Z', 0.0),
+            stress.get('Tau_XY', 0.0),
+            stress.get('Tau_YZ', 0.0),
+            stress.get('Tau_ZX', 0.0),
+        )
+    axial = stress.get('Axial_Stress', stress.get('Stress', 0.0))
+    return axial, 0.0, 0.0, 0.0, 0.0, 0.0
+
+
+def _von_mises(stress):
+    sx, sy, sz, txy, tyz, tzx = _stress_tensor_components(stress)
+    return (0.5 * ((sx - sy) ** 2 + (sy - sz) ** 2 + (sz - sx) ** 2)
+            + 3.0 * (txy ** 2 + tyz ** 2 + tzx ** 2)) ** 0.5
 
 
 def main():

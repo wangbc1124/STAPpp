@@ -10,6 +10,10 @@
 
 #include "Domain.h"
 #include "Material.h"
+#include <cmath>
+#include <functional>
+#include <sstream>
+#include <string>
 
 using namespace std;
 
@@ -23,6 +27,9 @@ CDomain::CDomain()
 
 	NUMNP = 0;
 	NodeList = nullptr;
+	DofAliases.clear();
+	ConstraintEquations.clear();
+	ConstraintPenalty = 0.0;
 	
 	NUMEG = 0;
 	EleGrpList = nullptr;
@@ -96,11 +103,86 @@ bool CDomain::ReadData(string FileName, string OutFile)
     else
         return false;
 
+//	Read optional MPC equations
+	if (!ReadConstraintEquations())
+		return false;
+
 //	Read element data
 	if (ReadElements())
         Output->OutputElementInfo();
     else
         return false;
+
+	return true;
+}
+
+bool CDomain::ReadDofAliases()
+{
+	DofAliases.assign(NUMNP * CNode::NDF, CDofAlias());
+	return true;
+}
+
+bool CDomain::ReadConstraintEquations()
+{
+	Input >> ws;
+	streampos pos = Input.tellg();
+	string tag;
+	if (!(Input >> tag))
+	{
+		Input.clear();
+		return true;
+	}
+	if (tag != "MPC")
+	{
+		Input.clear();
+		Input.seekg(pos);
+		return true;
+	}
+
+	unsigned int nEquation = 0;
+	Input >> nEquation;
+	if (!Input)
+	{
+		cerr << "*** Error *** Invalid MPC section header." << endl;
+		return false;
+	}
+
+	ConstraintEquations.clear();
+	ConstraintEquations.reserve(nEquation);
+	for (unsigned int i = 0; i < nEquation; ++i)
+	{
+		unsigned int nTerm = 0;
+		double rhs = 0.0;
+		Input >> nTerm >> rhs;
+		if (!Input)
+		{
+			cerr << "*** Error *** Invalid MPC header record in input file." << endl;
+			return false;
+		}
+
+		CMPCEquation equation;
+		equation.rhs = rhs;
+		equation.terms.reserve(nTerm);
+		for (unsigned int t = 0; t < nTerm; ++t)
+		{
+			CMPCEquationTerm term;
+			Input >> term.node >> term.dof >> term.coefficient;
+			if (!Input)
+			{
+				cerr << "*** Error *** Invalid MPC term record in input file." << endl;
+				return false;
+			}
+			if (term.node < 1 || term.node > NUMNP || term.dof < 1 || term.dof > CNode::NDF)
+			{
+				cerr << "*** Error *** MPC term out of range: "
+					 << term.node << ' ' << term.dof << endl;
+				return false;
+			}
+			equation.terms.push_back(term);
+		}
+
+		ConstraintEquations.push_back(equation);
+	}
 
 	return true;
 }
@@ -134,18 +216,47 @@ bool CDomain::ReadNodalPoints()
 //	Calculate global equation numbers corresponding to every degree of freedom of each node
 void CDomain::CalculateEquationNumber()
 {
+	if (DofAliases.size() != NUMNP * CNode::NDF)
+		DofAliases.assign(NUMNP * CNode::NDF, CDofAlias());
+
+	vector<unsigned int> equation(NUMNP * CNode::NDF, 0);
+	vector<unsigned char> state(NUMNP * CNode::NDF, 0);
+
+	std::function<unsigned int(unsigned int, unsigned int)> assign_eq =
+		[&](unsigned int node, unsigned int dof) -> unsigned int
+	{
+		const unsigned int idx = node * CNode::NDF + dof;
+		if (NodeList[node].bcode[dof])
+			return 0;
+		if (equation[idx])
+			return equation[idx];
+		if (state[idx] == 1)
+		{
+			cerr << "*** Error *** Cyclic ALIAS definition detected at node "
+				 << (node + 1) << ", dof " << (dof + 1) << endl;
+			exit(4);
+		}
+
+		state[idx] = 1;
+		const CDofAlias& alias = DofAliases[idx];
+		if (alias.master_node)
+		{
+			equation[idx] = assign_eq(alias.master_node - 1, alias.master_dof - 1);
+		}
+		else
+		{
+			equation[idx] = ++NEQ;
+		}
+		state[idx] = 2;
+		return equation[idx];
+	};
+
 	NEQ = 0;
 	for (unsigned int np = 0; np < NUMNP; np++)	// Loop over for all node
 	{
 		for (unsigned int dof = 0; dof < CNode::NDF; dof++)	// Loop over for DOFs of node np
 		{
-			if (NodeList[np].bcode[dof]) 
-				NodeList[np].bcode[dof] = 0;
-			else
-			{
-				NEQ++;
-				NodeList[np].bcode[dof] = NEQ;
-			}
+			NodeList[np].bcode[dof] = assign_eq(np, dof);
 		}
 	}
 }
@@ -222,6 +333,21 @@ void CDomain::CalculateColumnHeights()
             StiffnessMatrix->CalculateColumnHeight(Element.GetLocationMatrix(), Element.GetND());
         }
     }
+
+	for (size_t eq = 0; eq < ConstraintEquations.size(); ++eq)
+	{
+		vector<unsigned int> location;
+		location.reserve(ConstraintEquations[eq].terms.size());
+		for (size_t term = 0; term < ConstraintEquations[eq].terms.size(); ++term)
+		{
+			const CMPCEquationTerm& item = ConstraintEquations[eq].terms[term];
+			unsigned int equationNo = NodeList[item.node - 1].bcode[item.dof - 1];
+			if (equationNo)
+				location.push_back(equationNo);
+		}
+		if (!location.empty())
+			StiffnessMatrix->CalculateColumnHeight(location.data(), location.size());
+	}
     
     StiffnessMatrix->CalculateMaximumHalfBandwidth();
     
@@ -279,6 +405,8 @@ void CDomain::AssembleStiffnessMatrix()
 		Matrix = nullptr;
 	}
 
+	ApplyConstraintEquations();
+
 #ifdef _DEBUG_
 	COutputter* Output = COutputter::GetInstance();
 	Output->PrintStiffnessMatrix();
@@ -305,6 +433,84 @@ bool CDomain::AssembleForce(unsigned int LoadCase)
             Force[dof - 1] += LoadData->load[lnum];
 	}
 
+	if (ConstraintPenalty > 0.0)
+	{
+		for (size_t eq = 0; eq < ConstraintEquations.size(); ++eq)
+		{
+			const CMPCEquation& equation = ConstraintEquations[eq];
+			if (fabs(equation.rhs) <= 0.0)
+				continue;
+			for (size_t term = 0; term < equation.terms.size(); ++term)
+			{
+				const CMPCEquationTerm& item = equation.terms[term];
+				unsigned int equationNo = NodeList[item.node - 1].bcode[item.dof - 1];
+				if (equationNo)
+					Force[equationNo - 1] += ConstraintPenalty * item.coefficient * equation.rhs;
+			}
+		}
+	}
+
 	return true;
+}
+
+void CDomain::ApplyConstraintEquations()
+{
+	if (ConstraintEquations.empty())
+		return;
+
+	double max_diag = 0.0;
+	for (unsigned int i = 1; i <= NEQ; ++i)
+	{
+		double diag = fabs((*StiffnessMatrix)(i, i));
+		if (diag > max_diag)
+			max_diag = diag;
+	}
+	if (max_diag <= 0.0)
+		max_diag = 1.0;
+
+	ConstraintPenalty = max_diag * 1.0e8;
+
+	for (size_t eq = 0; eq < ConstraintEquations.size(); ++eq)
+	{
+		vector<unsigned int> equations;
+		vector<double> coefficients;
+
+		for (size_t term = 0; term < ConstraintEquations[eq].terms.size(); ++term)
+		{
+			const CMPCEquationTerm& item = ConstraintEquations[eq].terms[term];
+			unsigned int equationNo = NodeList[item.node - 1].bcode[item.dof - 1];
+			if (!equationNo)
+				continue;
+
+			bool merged = false;
+			for (size_t i = 0; i < equations.size(); ++i)
+			{
+				if (equations[i] == equationNo)
+				{
+					coefficients[i] += item.coefficient;
+					merged = true;
+					break;
+				}
+			}
+			if (!merged)
+			{
+				equations.push_back(equationNo);
+				coefficients.push_back(item.coefficient);
+			}
+		}
+
+		for (size_t j = 0; j < equations.size(); ++j)
+		{
+			if (fabs(coefficients[j]) < 1.0e-20)
+				continue;
+			for (size_t i = 0; i <= j; ++i)
+			{
+				if (fabs(coefficients[i]) < 1.0e-20)
+					continue;
+				(*StiffnessMatrix)(equations[i], equations[j]) +=
+					ConstraintPenalty * coefficients[i] * coefficients[j];
+			}
+		}
+	}
 }
 

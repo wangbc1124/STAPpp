@@ -16,6 +16,7 @@
 #include "Solver.h"
 #include "LoadCaseData.h"
 #include "SkylineMatrix.h"
+#include <vector>
 
 using namespace std;
 
@@ -27,6 +28,24 @@ template <class type> void clear( type* a, unsigned int N );
 class CDomain
 {
 private:
+	struct CDofAlias
+	{
+		unsigned int master_node = 0;
+		unsigned int master_dof = 0;
+	};
+
+	struct CMPCEquationTerm
+	{
+		unsigned int node = 0;
+		unsigned int dof = 0;
+		double coefficient = 0.0;
+	};
+
+	struct CMPCEquation
+	{
+		std::vector<CMPCEquationTerm> terms;
+		double rhs = 0.0;
+	};
 
 //!	The instance of the Domain class
 	static CDomain* _instance;
@@ -67,6 +86,15 @@ private:
 //!	Total number of equations in the system
 	unsigned int NEQ;
 
+//! Optional equation aliases for tied translational DOFs
+	std::vector<CDofAlias> DofAliases;
+
+//! Multi-point constraint equations
+	std::vector<CMPCEquation> ConstraintEquations;
+
+//! Penalty factor used for MPC enforcement
+	double ConstraintPenalty;
+
 //!	Banded stiffness matrix
 /*! A one-dimensional array storing only the elements below the	skyline of the 
     global stiffness matrix. */
@@ -94,6 +122,12 @@ public:
 //!	Read nodal point data
 	bool ReadNodalPoints();
 
+//!	Read optional DOF alias data inserted by the preprocessor
+	bool ReadDofAliases();
+
+//! Read optional MPC equations inserted by the preprocessor
+	bool ReadConstraintEquations();
+
 //!	Read load case data
 	bool ReadLoadCases();
 
@@ -113,6 +147,9 @@ public:
 
 //!	Assemble the banded gloabl stiffness matrix
 	void AssembleStiffnessMatrix();
+
+//!	Add penalty-form MPC contributions to the assembled stiffness matrix
+	void ApplyConstraintEquations();
 
 //!	Assemble the global nodal force vector for load case LoadCase
 	bool AssembleForce(unsigned int LoadCase); 

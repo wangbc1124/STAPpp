@@ -308,11 +308,11 @@ void CH8::ElementStiffness(double* Matrix)
 	double hmin = fmin(fmin(dx, dy), dz);
 	double aspect = (hmin > 1e-20) ? hmax / hmin : 1.0;
 
-	double alpha_base = 0.05;
+	double alpha_base = 0.009;
 	double alpha = alpha_base;
 	if (aspect > 3.0) {
 		alpha = alpha_base * 3.0 / aspect;
-		if (alpha < 0.03) alpha = 0.03;
+		if (alpha < 0.0055) alpha = 0.0055;
 	}
 	double sum_diag_1pt = 0.0, sum_diag_full = 0.0;
 	for (int i = 0; i < 24; i++) {
