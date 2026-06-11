@@ -42,7 +42,9 @@ enum ElementTypes
     Shell,  // Shell element
     Beam3D, // 3D Beam element
     Shell4, // 4-node flat shell element (membrane + plate bending)
-    Beam3DTimoshenko // 3D Timoshenko beam element
+    Beam3DTimoshenko, // 3D Timoshenko beam element
+    H8R = 12, // 8-node reduced-integration hexahedral element
+    H8RPier = 14 // pier-local reduced-integration hexahedral element
 };
 
 //! Element group class

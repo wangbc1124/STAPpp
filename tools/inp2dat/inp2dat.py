@@ -143,6 +143,136 @@ def hex_volume(conn, nodes):
     return abs(det3(j)) * 8.0
 
 
+def hex_faces(conn):
+    return [
+        [conn[i] for i in (0, 1, 2, 3)],
+        [conn[i] for i in (4, 5, 6, 7)],
+        [conn[i] for i in (0, 1, 5, 4)],
+        [conn[i] for i in (1, 2, 6, 5)],
+        [conn[i] for i in (2, 3, 7, 6)],
+        [conn[i] for i in (3, 0, 4, 7)],
+    ]
+
+
+def element_tie_faces(elem):
+    etype = elem["type"]
+    conn = elem["nodes"]
+    if etype == "C3D8R" and len(conn) >= 8:
+        return [("quad", face) for face in hex_faces(conn)]
+    if etype == "S4R" and len(conn) >= 4:
+        return [("quad", conn[:4])]
+    if etype in ("B31", "T3D2") and len(conn) >= 2:
+        return [("line", conn[:2])]
+    return []
+
+
+def project_line(point, face_nodes, nodes):
+    a = nodes[face_nodes[0]]
+    b = nodes[face_nodes[1]]
+    ab = vec_sub(b, a)
+    den = vec_dot(ab, ab)
+    t = 0.0 if den < 1.0e-20 else vec_dot(vec_sub(point, a), ab) / den
+    t = max(0.0, min(1.0, t))
+    q = vec_add(a, vec_scale(ab, t))
+    dist = vec_norm(vec_sub(point, q))
+    return dist, [(face_nodes[0], 1.0 - t), (face_nodes[1], t)]
+
+
+def quad_shape(xi, eta):
+    return [
+        0.25 * (1.0 - xi) * (1.0 - eta),
+        0.25 * (1.0 + xi) * (1.0 - eta),
+        0.25 * (1.0 + xi) * (1.0 + eta),
+        0.25 * (1.0 - xi) * (1.0 + eta),
+    ]
+
+
+def project_quad(point, face_nodes, nodes):
+    pts = [nodes[n] for n in face_nodes]
+    xi = 0.0
+    eta = 0.0
+    for _ in range(12):
+        n = quad_shape(xi, eta)
+        q = (0.0, 0.0, 0.0)
+        for w, p in zip(n, pts):
+            q = vec_add(q, vec_scale(p, w))
+        r = vec_sub(q, point)
+        dxi = [
+            -0.25 * (1.0 - eta),
+             0.25 * (1.0 - eta),
+             0.25 * (1.0 + eta),
+            -0.25 * (1.0 + eta),
+        ]
+        deta = [
+            -0.25 * (1.0 - xi),
+            -0.25 * (1.0 + xi),
+             0.25 * (1.0 + xi),
+             0.25 * (1.0 - xi),
+        ]
+        gx = (0.0, 0.0, 0.0)
+        ge = (0.0, 0.0, 0.0)
+        for wx, we, p in zip(dxi, deta, pts):
+            gx = vec_add(gx, vec_scale(p, wx))
+            ge = vec_add(ge, vec_scale(p, we))
+        a00 = vec_dot(gx, gx)
+        a01 = vec_dot(gx, ge)
+        a11 = vec_dot(ge, ge)
+        b0 = -vec_dot(gx, r)
+        b1 = -vec_dot(ge, r)
+        det = a00 * a11 - a01 * a01
+        if abs(det) < 1.0e-24:
+            break
+        d_xi = (b0 * a11 - b1 * a01) / det
+        d_eta = (a00 * b1 - a01 * b0) / det
+        xi = max(-1.0, min(1.0, xi + d_xi))
+        eta = max(-1.0, min(1.0, eta + d_eta))
+        if abs(d_xi) + abs(d_eta) < 1.0e-10:
+            break
+    n = quad_shape(xi, eta)
+    q = (0.0, 0.0, 0.0)
+    for w, p in zip(n, pts):
+        q = vec_add(q, vec_scale(p, w))
+    dist = vec_norm(vec_sub(point, q))
+    return dist, [(nid, w) for nid, w in zip(face_nodes, n) if abs(w) > 1.0e-10]
+
+
+def build_master_faces(elements, master_nodes, master_instances=None):
+    master_set = set(master_nodes)
+    master_instances = set(master_instances or [])
+    faces = []
+    for elem in elements:
+        if master_instances and elem.get("instance") not in master_instances:
+            continue
+        for kind, face in element_tie_faces(elem):
+            if master_instances or all(n in master_set for n in face):
+                faces.append((kind, face))
+    return faces
+
+
+def find_tie_interpolation(point, master_nodes, master_faces, nodes):
+    best = None
+    for kind, face in master_faces:
+        if kind == "quad":
+            dist, weights = project_quad(point, face, nodes)
+        else:
+            dist, weights = project_line(point, face, nodes)
+        if best is None or dist < best[0]:
+            best = (dist, weights)
+    if best is not None:
+        return best[0], best[1], "projected"
+
+    best_n = None
+    best_d = float("inf")
+    for nid in master_nodes:
+        d = vec_norm(vec_sub(point, nodes[nid]))
+        if d < best_d:
+            best_n = nid
+            best_d = d
+    if best_n is None:
+        return None
+    return best_d, [(best_n, 1.0)], "node"
+
+
 def parse_part(lines, i):
     part = {"nodes": {}, "elements": [], "sections": {}, "nsets": {}, "elsets": {}}
     while i < len(lines):
@@ -408,13 +538,16 @@ def flatten_assembly(data, merge_tol=1.0e-6):
                 "material": sec.get("material", ""),
                 "section": sec.get("data", []),
                 "n1": n1_vec,
+                "instance": inst["name"],
             })
             next_elem += 1
 
-    # Build raw tie pairs. Abaqus assembly instances keep their own nodes even
-    # when coordinates are coincident; connectivity between instances must come
-    # from explicit constraints, not geometric node merging.
-    raw_tie_pairs = []
+    # Build raw tie interpolations. Abaqus assembly instances keep their own
+    # nodes even when coordinates are coincident; connectivity between
+    # instances must come from explicit constraints, not geometric node merging.
+    raw_tie_interpolations = []
+    tie_face_count = 0
+    tie_node_fallback_count = 0
     for tie in data["assembly"].get("ties", []):
         slave_surf = tie.get("slave", "")
         master_surf = tie.get("master", "")
@@ -422,6 +555,7 @@ def flatten_assembly(data, merge_tol=1.0e-6):
         master_nset = data["assembly"]["surfaces"].get(master_surf, master_surf.replace("_CNS_", ""))
         slave_nodes, master_nodes = [], []
         slave_instances = set()
+        master_instances = set()
         for nset in data["assembly"].get("nsets", []):
             if nset["name"] == slave_nset:
                 slave_instances.add(nset["instance"])
@@ -429,22 +563,25 @@ def flatten_assembly(data, merge_tol=1.0e-6):
                     gid = node_map_raw.get((nset["instance"], lnid))
                     if gid: slave_nodes.append(gid)
             if nset["name"] == master_nset:
+                master_instances.add(nset["instance"])
                 for lnid in nset["numbers"]:
                     gid = node_map_raw.get((nset["instance"], lnid))
                     if gid: master_nodes.append(gid)
         if not slave_nodes or not master_nodes:
             continue
+        master_faces = build_master_faces(raw_elements, master_nodes, master_instances)
         for sg in slave_nodes:
             sp = raw_nodes[sg]
-            best_mg, best_d = None, float("inf")
-            for mg in master_nodes:
-                mp = raw_nodes[mg]
-                d = math.sqrt((sp[0]-mp[0])**2 + (sp[1]-mp[1])**2 + (sp[2]-mp[2])**2)
-                if d < best_d:
-                    best_d = d
-                    best_mg = mg
-            if best_mg and best_d < 100.0:
-                raw_tie_pairs.append((sg, best_mg))
+            interp = find_tie_interpolation(sp, master_nodes, master_faces, raw_nodes)
+            if interp is None:
+                continue
+            best_d, weights, source = interp
+            if best_d < 100.0:
+                raw_tie_interpolations.append((sg, weights))
+                if source == "projected":
+                    tie_face_count += 1
+                else:
+                    tie_node_fallback_count += 1
 
     old_to_new = {old_id: old_id for old_id in raw_nodes}
     nodes = dict(sorted(raw_nodes.items()))
@@ -455,52 +592,26 @@ def flatten_assembly(data, merge_tol=1.0e-6):
 
     node_map = {key: old_to_new[old] for key, old in node_map_raw.items()}
     mpc_equations = []
-    for slave_raw, master_raw in raw_tie_pairs:
+    for slave_raw, master_weights_raw in raw_tie_interpolations:
         slave_gid = old_to_new.get(slave_raw)
-        master_gid = old_to_new.get(master_raw)
-        if not slave_gid or not master_gid or slave_gid == master_gid:
+        if not slave_gid:
             continue
-        beam_p = nodes.get(slave_gid)
-        cont_p = nodes.get(master_gid)
-        if beam_p is None or cont_p is None:
+        weights = []
+        for master_raw, weight in master_weights_raw:
+            master_gid = old_to_new.get(master_raw)
+            if master_gid and master_gid != slave_gid and abs(weight) > 1.0e-12:
+                weights.append((master_gid, weight))
+        if not weights:
             continue
 
-        rx = cont_p[0] - beam_p[0]
-        ry = cont_p[1] - beam_p[1]
-        rz = cont_p[2] - beam_p[2]
-
-        # Rigid-link kinematics:
-        # u_cont = u_beam + theta_beam x r
-        # where r = x_cont - x_beam.
-        mpc_equations.append({
-            "rhs": 0.0,
-            "terms": [
-                (master_gid, 1, 1.0),
-                (slave_gid, 1, -1.0),
-                (slave_gid, 5, -rz),
-                (slave_gid, 6,  ry),
-            ],
-        })
-        mpc_equations.append({
-            "rhs": 0.0,
-            "terms": [
-                (master_gid, 2, 1.0),
-                (slave_gid, 2, -1.0),
-                (slave_gid, 4,  rz),
-                (slave_gid, 6, -rx),
-            ],
-        })
-        mpc_equations.append({
-            "rhs": 0.0,
-            "terms": [
-                (master_gid, 3, 1.0),
-                (slave_gid, 3, -1.0),
-                (slave_gid, 4, -ry),
-                (slave_gid, 5,  rx),
-            ],
-        })
+        for dof in (1, 2, 3):
+            terms = [(slave_gid, dof, 1.0)]
+            for master_gid, weight in weights:
+                terms.append((master_gid, dof, -weight))
+            mpc_equations.append({"rhs": 0.0, "terms": terms})
     if mpc_equations:
         print(f"  Tie constraints: MPC on {len(mpc_equations) // 3} slave nodes")
+        print(f"  TieMPC interpolation: {tie_face_count} projected, {tie_node_fallback_count} node fallback")
 
     # Fix cable elements: ensure both end nodes have the same Y sign.
     # Tie constraint processing or coordinate merging can occasionally
@@ -543,8 +654,14 @@ def flatten_assembly(data, merge_tol=1.0e-6):
     return nodes, raw_elements, node_map, mpc_equations
 
 
-def stap_type(etype):
-    return {"T3D2": 1, "S4R": 10, "C3D8R": 5, "B31": 11}.get(etype, 0)
+def element_stap_type(elem, solid_type="H8R", h8i_instances=()):
+    etype = elem["type"] if isinstance(elem, dict) else elem
+    if etype == "C3D8R":
+        inst = elem.get("instance", "") if isinstance(elem, dict) else ""
+        if solid_type == "H8RPIER" and any(token and token in inst for token in h8i_instances):
+            return 14
+        return 12
+    return {"T3D2": 1, "S4R": 10, "B31": 11}.get(etype, 0)
 
 
 THREE_D_TYPES = {1, 5, 9, 10}
@@ -578,11 +695,13 @@ def resolve_fixed_nodes(data, node_map):
     return dict(fixed)
 
 
-def write_dat(path, data, nodes, elements, node_map, mpc_equations):
-    valid = [e for e in elements if stap_type(e["type"])]
+def write_dat(path, data, nodes, elements, node_map, mpc_equations,
+              solid_type="H8R", h8i_instances=(), beam_shear_ratio=0.1,
+              beam_stiffness_scale=1.0):
+    valid = [e for e in elements if element_stap_type(e, solid_type, h8i_instances)]
     skipped = defaultdict(int)
     for e in elements:
-        if not stap_type(e["type"]):
+        if not element_stap_type(e, solid_type, h8i_instances):
             skipped[e["type"]] += 1
     for etype, count in skipped.items():
         print(f"  WARNING: unknown element type {etype}, skipping {count} elements")
@@ -596,7 +715,7 @@ def write_dat(path, data, nodes, elements, node_map, mpc_equations):
     node_shell4_count = defaultdict(int)
     node_beam3d_count = defaultdict(int)
     for e in valid:
-        st = stap_type(e["type"])
+        st = element_stap_type(e, solid_type, h8i_instances)
         for n in e["nodes"]:
             connected.add(n)
             node_types[n].add(st)
@@ -700,7 +819,7 @@ def write_dat(path, data, nodes, elements, node_map, mpc_equations):
 
     groups = defaultdict(list)
     for e in valid:
-        groups[(stap_type(e["type"]), e["type"], e["material"])].append(e)
+        groups[(element_stap_type(e, solid_type, h8i_instances), e["type"], e["material"])].append(e)
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("Bridge-1: Cable-stayed bridge (3D conversion)\n")
@@ -757,7 +876,7 @@ def write_dat(path, data, nodes, elements, node_map, mpc_equations):
                 f.write(f"    1  {mat.get('E', 2.0e11):.6e}  {area:.6f}\n")
             elif st == 2:  # Q4
                 f.write(f"    1  {mat.get('E', 2.0e11):.6e}  {mat.get('nu', 0.3):.6f}  0.200000\n")
-            elif st == 5:  # H8
+            elif st in (5, 12, 14):  # H8 / H8R / H8RPier
                 f.write(f"    1  {mat.get('E', 2.0e11):.6e}  {mat.get('nu', 0.3):.6f}\n")
             elif st == 9:  # Beam3D
                 E_val = mat.get("E", 2.0e11)
@@ -793,11 +912,15 @@ def write_dat(path, data, nodes, elements, node_map, mpc_equations):
                     area, Iy, Iz, J = box_section_props(a, b, t1, t2, t3, t4)
                 else:
                     area, Iy, Iz, J = 0.76, 0.4585, 0.4585, 0.6859
+                area *= beam_stiffness_scale
+                Iy *= beam_stiffness_scale
+                Iz *= beam_stiffness_scale
+                J *= beam_stiffness_scale
                 # Thin-walled box sections have lower effective shear area than
                 # the solid-rectangle 5/6*A estimate. Abaqus computes this from
                 # the section geometry; use a calibrated box-section estimate.
-                Asy = 0.1 * area
-                Asz = 0.1 * area
+                Asy = beam_shear_ratio * area
+                Asz = beam_shear_ratio * area
                 n1_vec = elems[0].get("n1") if elems else None
                 if n1_vec is None:
                     n1_vec = (0.0, 0.0, -1.0)
@@ -816,6 +939,15 @@ def main():
     parser = argparse.ArgumentParser(description="Convert Abaqus .inp to STAP++ .dat")
     parser.add_argument("inp", nargs="?", default="Bridge-1.inp")
     parser.add_argument("dat", nargs="?", default="Bridge-1.dat")
+    parser.add_argument("--solid-type", choices=("H8R", "H8RPIER"), default="H8RPIER",
+                        help="STAP++ solid element used for Abaqus C3D8R")
+    parser.add_argument("--pier-instances", default="Part-Pier",
+                        help="Comma-separated instance-name tokens converted to H8RPier when --solid-type H8RPIER")
+    parser.add_argument("--h8i-instances", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--beam-shear-ratio", type=float, default=0.1,
+                        help="Effective B31 Timoshenko shear area ratio As/A")
+    parser.add_argument("--beam-stiffness-scale", type=float, default=1.0,
+                        help="Scale B31 section stiffness properties in the STAP++ material line")
     args = parser.parse_args()
 
     print("Abaqus .inp -> STAP++ .dat converter")
@@ -829,7 +961,16 @@ def main():
     print(f"  Global nodes: {len(nodes)}")
     print(f"  Global elements: {len(elements)}")
     print(f"  MPC equations: {len(mpc_equations)}")
-    write_dat(args.dat, data, nodes, elements, node_map, mpc_equations)
+    pier_instance_arg = args.h8i_instances if args.h8i_instances is not None else args.pier_instances
+    h8i_instances = tuple(x.strip() for x in pier_instance_arg.split(",") if x.strip())
+    if args.solid_type == "H8RPIER":
+        print(f"  Solid mapping: C3D8R -> H8RPier for instances matching {h8i_instances}")
+    else:
+        print("  Solid mapping: C3D8R -> H8R")
+    write_dat(args.dat, data, nodes, elements, node_map, mpc_equations,
+              solid_type=args.solid_type, h8i_instances=h8i_instances,
+              beam_shear_ratio=args.beam_shear_ratio,
+              beam_stiffness_scale=args.beam_stiffness_scale)
     print("Done.")
 
 

@@ -11,11 +11,22 @@
 #include "Shell4.h"
 #include "Material.h"
 
+#include <cstdlib>
 #include <iostream>
 #include <iomanip>
 #include <cmath>
 
 using namespace std;
+
+static double ShellEnvDouble(const char* name, double default_value)
+{
+	const char* value = getenv(name);
+	if (!value || !*value)
+		return default_value;
+	char* end = nullptr;
+	double parsed = strtod(value, &end);
+	return (end && end != value) ? parsed : default_value;
+}
 
 //	Constructor
 CShell4::CShell4()
@@ -387,7 +398,7 @@ void CShell4::ElementStiffness(double* Matrix)
 		                   sqrt((xloc[2]-xloc[1])*(xloc[2]-xloc[1]) + (yloc[2]-yloc[1])*(yloc[2]-yloc[1])));
 		double h2 = 0.5 * (lx * lx + ly * ly);
 		if (h2 > 1.0e-20) {
-			const double hg_alpha = 0.0006;
+			const double hg_alpha = ShellEnvDouble("STAP_SHELL4_HG_ALPHA", 0.0006);
 			double k_hg = hg_alpha * Ds * detJ * 4.0 / h2;
 			for (int a = 0; a < 4; ++a) {
 				int ia = 6 * a + 2;

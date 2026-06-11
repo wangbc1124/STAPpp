@@ -20,6 +20,9 @@ Supported element types:
   7  Plate   (4-node Mindlin-Reissner plate bending)
   9  Beam3D  (2-node 3D beam, NDF=6)
   10 Shell4  (4-node flat shell, alt)
+  11 Beam3DTimoshenko (2-node B31-equivalent beam)
+  12 H8R     (8-node reduced-integration hexahedron)
+  14 H8RPier (8-node pier-local reduced-integration hexahedron)
 
 Both NDF=3 and NDF=6 per-node formats are auto-detected.
 """
@@ -46,6 +49,9 @@ ELEM_DEF = {
     7:  (VTK_QUAD,        4, 4),    # Plate:  mat#, E, nu, t
     9:  (VTK_LINE,        2, 10),   # Beam3D: mat#, E, G, A, Iy, Iz, J, ox, oy, oz
     10: (VTK_QUAD,        4, 4),    # Shell4: mat#, E, nu, t  (alt)
+    11: (VTK_LINE,        2, 12),   # Beam3DTimoshenko: mat#, E, nu, A, Iy, Iz, J, Asy, Asz, ox, oy, oz
+    12: (VTK_HEXAHEDRON,  8, 3),    # H8R:    mat#, E, nu
+    14: (VTK_HEXAHEDRON,  8, 3),    # H8RPier: mat#, E, nu
 }
 
 

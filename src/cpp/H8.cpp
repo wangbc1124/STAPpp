@@ -1,9 +1,12 @@
 #include "H8.h"
 
+#include <cstdlib>
 #include <cmath>
 #include <iomanip>
 
 using namespace std;
+
+static double EnvDouble(const char* name, double default_value);
 
 CH8::CH8()
 {
@@ -18,6 +21,26 @@ CH8::CH8()
 
 CH8::~CH8()
 {
+}
+
+double CH8::HourglassAlphaBase() const
+{
+	return EnvDouble("STAP_H8_ALPHA", 0.009);
+}
+
+double CH8::HourglassAlphaMin() const
+{
+	return EnvDouble("STAP_H8_ALPHA_MIN", 0.0055);
+}
+
+double CH8RPier::HourglassAlphaBase() const
+{
+	return EnvDouble("STAP_PIER_H8_ALPHA", 0.00904);
+}
+
+double CH8RPier::HourglassAlphaMin() const
+{
+	return EnvDouble("STAP_PIER_H8_ALPHA_MIN", 0.0055);
 }
 
 bool CH8::Read(ifstream& Input, CMaterial* MaterialSets, CNode* NodeList)
@@ -56,6 +79,16 @@ void CH8::GenerateLocationMatrix()
 static const double xi[8]   = {-1,  1,  1, -1, -1,  1,  1, -1};
 static const double eta[8]  = {-1, -1,  1,  1, -1, -1,  1,  1};
 static const double zeta[8] = {-1, -1, -1, -1,  1,  1,  1,  1};
+
+static double EnvDouble(const char* name, double default_value)
+{
+	const char* value = getenv(name);
+	if (!value || !*value)
+		return default_value;
+	char* end = nullptr;
+	double parsed = strtod(value, &end);
+	return (end && end != value) ? parsed : default_value;
+}
 
 void CH8::ElementStiffness(double* Matrix)
 {
@@ -308,11 +341,12 @@ void CH8::ElementStiffness(double* Matrix)
 	double hmin = fmin(fmin(dx, dy), dz);
 	double aspect = (hmin > 1e-20) ? hmax / hmin : 1.0;
 
-	double alpha_base = 0.009;
+	double alpha_base = HourglassAlphaBase();
 	double alpha = alpha_base;
 	if (aspect > 3.0) {
 		alpha = alpha_base * 3.0 / aspect;
-		if (alpha < 0.0055) alpha = 0.0055;
+		double alpha_min = HourglassAlphaMin();
+		if (alpha < alpha_min) alpha = alpha_min;
 	}
 	double sum_diag_1pt = 0.0, sum_diag_full = 0.0;
 	for (int i = 0; i < 24; i++) {

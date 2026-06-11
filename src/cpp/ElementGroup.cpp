@@ -83,7 +83,10 @@ void CElementGroup::CalculateMemberSize()
             MaterialSize_ = sizeof(CBeamMaterial);
             break;
         case ElementTypes::H8:
-            ElementSize_ = sizeof(CH8);
+        case ElementTypes::H8R:
+        case ElementTypes::H8RPier:
+            ElementSize_ = (ElementType_ == ElementTypes::H8R) ? sizeof(CH8R) :
+                ((ElementType_ == ElementTypes::H8RPier) ? sizeof(CH8RPier) : sizeof(CH8));
             MaterialSize_ = sizeof(CH8Material);
             break;
         case ElementTypes::Plate:
@@ -132,6 +135,12 @@ void CElementGroup::AllocateElements(std::size_t size)
         case ElementTypes::H8:
             ElementList_ = new CH8[size];
             break;
+        case ElementTypes::H8R:
+            ElementList_ = new CH8R[size];
+            break;
+        case ElementTypes::H8RPier:
+            ElementList_ = new CH8RPier[size];
+            break;
         case ElementTypes::Plate:
             ElementList_ = new CPlate[size];
             break;
@@ -162,6 +171,8 @@ void CElementGroup::AllocateMaterials(std::size_t size)
             MaterialList_ = new CBeamMaterial[size];
             break;
         case ElementTypes::H8:
+        case ElementTypes::H8R:
+        case ElementTypes::H8RPier:
             MaterialList_ = new CH8Material[size];
             break;
         case ElementTypes::Beam3D:

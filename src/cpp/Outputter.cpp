@@ -157,6 +157,8 @@ void COutputter::OutputElementInfo()
 		  << "     EQ.9, TWO-NODE 3D EULER-BERNOULLI BEAM ELEMENTS" << endl
 		  << "     EQ.10, FOUR-NODE FLAT SHELL ELEMENTS" << endl
 		  << "     EQ.11, TWO-NODE 3D TIMOSHENKO BEAM ELEMENTS" << endl
+		  << "     EQ.12, EIGHT-NODE REDUCED-INTEGRATION HEXAHEDRAL ELEMENTS" << endl
+		  << "     EQ.14, PIER-LOCAL REDUCED-INTEGRATION HEXAHEDRAL ELEMENTS" << endl
 		  << endl;
 
 		*this << " NUMBER OF ELEMENTS. . . . . . . . . . .( NPAR(2) ) . . =" << setw(5) << NUME
@@ -187,6 +189,8 @@ void COutputter::OutputElementInfo()
 		        break;
 		    }
 		    case ElementTypes::H8: // H8 element
+		    case ElementTypes::H8R: // H8R element
+		    case ElementTypes::H8RPier: // H8RPier element
 		    {
 		        OutputH8Elements(EleGrp);
 		        break;
@@ -414,6 +418,8 @@ void COutputter::OutputElementStress()
 				}
 
 				case ElementTypes::H8: // H8 3D solid element
+				case ElementTypes::H8R: // H8R 3D solid element
+				case ElementTypes::H8RPier: // H8RPier 3D solid element
 				{
 					*this << "  ELEMENT          SIGMA-X          SIGMA-Y          SIGMA-Z" << endl
 						<< "                    TAU-XY           TAU-YZ           TAU-ZX" << endl

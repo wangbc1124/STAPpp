@@ -19,6 +19,8 @@ Supports all element types:
   9  Beam3D (2-node 3D beam)
   10 Shell4 (4-node flat shell, membrane + plate bending)
   11 Beam3DTimoshenko (2-node B31-equivalent spatial beam)
+  12 H8R    (8-node reduced-integration hexahedron)
+  14 H8RPier (8-node pier-local reduced-integration hexahedron)
 """
 
 import re
@@ -52,6 +54,10 @@ ELEM_DEF = {
     11: (VTK_LINE,        2, ['Axial_Force','Moment_Y1','Moment_Z1',
                               'Torque1','Axial_Stress','Moment_Y2',
                               'Moment_Z2','Torque2'],  3),
+    12: (VTK_HEXAHEDRON,  8, ['Sigma_X','Sigma_Y','Sigma_Z',
+                              'Tau_XY', 'Tau_YZ', 'Tau_ZX'],  2),
+    14: (VTK_HEXAHEDRON,  8, ['Sigma_X','Sigma_Y','Sigma_Z',
+                              'Tau_XY', 'Tau_YZ', 'Tau_ZX'],  2),
 }
 
 
@@ -493,6 +499,28 @@ def _write_stress_data(f, result, num_cells, header_already_written=False):
     f.write('LOOKUP_TABLE default\n')
     for ci in range(num_cells):
         f.write(f'  {_von_mises(cell_stress[ci]):14.6e}\n')
+
+    sigma_components = [
+        ('Sigma-Magnitude', lambda s: _von_mises(s)),
+        ('Sigma-s11', lambda s: _stress_tensor_components(s)[0]),
+        ('Sigma-s22', lambda s: _stress_tensor_components(s)[1]),
+        ('Sigma-s33', lambda s: _stress_tensor_components(s)[2]),
+        ('Sigma-s12', lambda s: _stress_tensor_components(s)[3]),
+        ('Sigma-s23', lambda s: _stress_tensor_components(s)[4]),
+        ('Sigma-s13', lambda s: _stress_tensor_components(s)[5]),
+    ]
+    for name, getter in sigma_components:
+        f.write(f'SCALARS {name} float 1\n')
+        f.write('LOOKUP_TABLE default\n')
+        for ci in range(num_cells):
+            f.write(f'  {getter(cell_stress[ci]):14.6e}\n')
+
+    f.write('TENSORS Sigma float\n')
+    for ci in range(num_cells):
+        sx, sy, sz, txy, tyz, tzx = _stress_tensor_components(cell_stress[ci])
+        f.write(f'  {sx:14.6e} {txy:14.6e} {tzx:14.6e}\n')
+        f.write(f'  {txy:14.6e} {sy:14.6e} {tyz:14.6e}\n')
+        f.write(f'  {tzx:14.6e} {tyz:14.6e} {sz:14.6e}\n')
 
     f.write('TENSORS StressTensor float\n')
     for ci in range(num_cells):
