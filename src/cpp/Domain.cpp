@@ -470,10 +470,14 @@ void CDomain::ApplyConstraintEquations()
 
 	ConstraintPenalty = max_diag * 1.0e8;
 
+	vector<unsigned int> equations;
+	vector<double> coefficients;
 	for (size_t eq = 0; eq < ConstraintEquations.size(); ++eq)
 	{
-		vector<unsigned int> equations;
-		vector<double> coefficients;
+		equations.clear();
+		coefficients.clear();
+		equations.reserve(ConstraintEquations[eq].terms.size());
+		coefficients.reserve(ConstraintEquations[eq].terms.size());
 
 		for (size_t term = 0; term < ConstraintEquations[eq].terms.size(); ++term)
 		{

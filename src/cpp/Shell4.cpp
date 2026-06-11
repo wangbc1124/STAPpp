@@ -183,14 +183,17 @@ void CShell4::ElementStiffness(double* Matrix)
 			K[i][j] = 0.0;
 
 	// Constitutive matrices
-	double Dm_fac = E * t / (1.0 - nu*nu);
+	double membrane_scale = ShellEnvDouble("STAP_SHELL4_MEMBRANE_SCALE", 1.0);
+	double bending_scale = ShellEnvDouble("STAP_SHELL4_BENDING_SCALE", 1.0);
+	double shear_scale = ShellEnvDouble("STAP_SHELL4_SHEAR_SCALE", 1.0);
+	double Dm_fac = membrane_scale * E * t / (1.0 - nu*nu);
 	double Dm[3][3] = {
 		{Dm_fac, Dm_fac*nu, 0.0},
 		{Dm_fac*nu, Dm_fac, 0.0},
 		{0.0, 0.0, Dm_fac*(1.0-nu)/2.0}
 	};
 
-	double Db_fac = E * t*t*t / (12.0 * (1.0 - nu*nu));
+	double Db_fac = bending_scale * E * t*t*t / (12.0 * (1.0 - nu*nu));
 	double Db[3][3] = {
 		{Db_fac, Db_fac*nu, 0.0},
 		{Db_fac*nu, Db_fac, 0.0},
@@ -199,7 +202,7 @@ void CShell4::ElementStiffness(double* Matrix)
 
 	double G = E / (2.0 * (1.0 + nu));
 	double k_s = 5.0 / 6.0;
-	double Ds = k_s * G * t;
+	double Ds = shear_scale * k_s * G * t;
 
 	// --- 4a. Membrane stiffness (2x2 Gauss): DOF u,v per node ---
 	// Indices in K_local[24]: node N -> u=6N, v=6N+1

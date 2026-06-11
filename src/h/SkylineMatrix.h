@@ -85,6 +85,15 @@ public:
 //! Return pointer to the DiagonalAddress_
     inline unsigned int* GetDiagonalAddress();
 
+//! Return pointer to raw skyline data
+    inline T_* GetData();
+
+//! Return 1-based first row stored in a skyline column
+    inline unsigned int FirstRow(unsigned int column) const;
+
+//! Return raw array offset for a stored entry in column-major skyline storage
+    inline unsigned int Offset(unsigned int row, unsigned int column) const;
+
 //! Return the dimension of the stiffness matrix
     inline unsigned int dim() const;
     
@@ -189,6 +198,24 @@ inline unsigned int* CSkylineMatrix<T_>::GetDiagonalAddress()
     return DiagonalAddress_;
 }
 
+template <class T_>
+inline T_* CSkylineMatrix<T_>::GetData()
+{
+    return data_;
+}
+
+template <class T_>
+inline unsigned int CSkylineMatrix<T_>::FirstRow(unsigned int column) const
+{
+    return column - ColumnHeights_[column - 1];
+}
+
+template <class T_>
+inline unsigned int CSkylineMatrix<T_>::Offset(unsigned int row, unsigned int column) const
+{
+    return DiagonalAddress_[column - 1] + (column - row) - 1;
+}
+
 //! Return the dimension of the stiffness matrix
 template <class T_>
 inline unsigned int CSkylineMatrix<T_>::dim() const
@@ -256,8 +283,15 @@ void CSkylineMatrix<T_>::Assembly(double* Matrix, unsigned int* LocationMatrix, 
             unsigned int Li = LocationMatrix[i];    // Global equation number corresponding to ith DOF of the element
             
             if (!Li) continue;
-            
-            (*this)(Li,Lj) += Matrix[DiagjElement + j - i];
+
+            unsigned int row = Li;
+            unsigned int column = Lj;
+            if (row > column)
+            {
+                row = Lj;
+                column = Li;
+            }
+            data_[DiagonalAddress_[column - 1] + (column - row) - 1] += Matrix[DiagjElement + j - i];
         }
     }
     
@@ -281,4 +315,3 @@ void CSkylineMatrix<T_>::CalculateDiagnoalAddress()
 #endif
     
 }
-

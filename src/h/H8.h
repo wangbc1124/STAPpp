@@ -8,6 +8,13 @@ class CH8 : public CElement
 protected:
 	virtual double HourglassAlphaBase() const;
 	virtual double HourglassAlphaMin() const;
+	virtual double GlobalYStiffnessScale() const;
+	virtual bool UseSelectiveReducedIntegration() const;
+	virtual double SRIHourglassBlend() const;
+	virtual double FBHourglassScale() const;
+	virtual bool UseOrthogonalHourglass() const;
+	virtual double OrthogonalHourglassScale() const;
+	virtual double OrthogonalHourglassDirectionScale(int direction) const;
 
 public:
 	CH8();
@@ -33,4 +40,11 @@ class CH8RPier : public CH8R
 protected:
 	virtual double HourglassAlphaBase() const;
 	virtual double HourglassAlphaMin() const;
+	virtual double GlobalYStiffnessScale() const;
+	virtual bool UseSelectiveReducedIntegration() const;
+	virtual double SRIHourglassBlend() const;
+	virtual double FBHourglassScale() const;
+	virtual bool UseOrthogonalHourglass() const;
+	virtual double OrthogonalHourglassScale() const;
+	virtual double OrthogonalHourglassDirectionScale(int direction) const;
 };

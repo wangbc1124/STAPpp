@@ -2,6 +2,7 @@
 import argparse
 import math
 from collections import defaultdict
+from collections import deque
 
 
 def trim(s):
@@ -376,15 +377,22 @@ def parse_assembly(lines, i):
             continue
         if line.startswith("*Surface"):
             sname = header_value(line, "name")
+            stype = header_value(line, "type") or ""
             i += 1
             if i < len(lines) and not lines[i].startswith("*"):
-                assembly["surfaces"][sname] = lines[i].strip().split(",")[0].strip()
+                set_name = lines[i].strip().split(",")[0].strip()
+                assembly["surfaces"][sname] = {"set": set_name, "type": stype.upper()}
                 i += 1
             continue
         if line.startswith("*Tie"):
             tname = header_value(line, "name")
+            adjust = (header_value(line, "adjust") or "").lower()
             i += 1
-            tie = {"name": tname}
+            tie = {
+                "name": tname,
+                "adjust": adjust != "no",
+                "no_rotation": header_has_flag(line, "no rotation"),
+            }
             while i < len(lines) and not lines[i].startswith("*"):
                 p = split_comma(lines[i])
                 if len(p) >= 2:
@@ -395,6 +403,15 @@ def parse_assembly(lines, i):
             continue
         i += 1
     return assembly, i
+
+
+def surface_info(assembly, surf_name):
+    raw = assembly.get("surfaces", {}).get(surf_name)
+    if isinstance(raw, dict):
+        return raw
+    if raw:
+        return {"set": raw, "type": ""}
+    return {"set": surf_name.replace("_CNS_", ""), "type": ""}
 
 
 def parse_material(lines, i):
@@ -497,7 +514,84 @@ def find_section(part, elem_id):
     return {"material": "", "data": [], "n1": None}
 
 
-def flatten_assembly(data, merge_tol=1.0e-6):
+def build_rcm_order(nodes, elements, mpc_equations):
+    adjacency = {nid: set() for nid in nodes}
+    for elem in elements:
+        conn = [nid for nid in elem.get("nodes", []) if nid in adjacency]
+        for i, a in enumerate(conn):
+            for b in conn[i + 1:]:
+                if a != b:
+                    adjacency[a].add(b)
+                    adjacency[b].add(a)
+    for equation in mpc_equations:
+        conn = [term[0] for term in equation.get("terms", []) if term[0] in adjacency]
+        for i, a in enumerate(conn):
+            for b in conn[i + 1:]:
+                if a != b:
+                    adjacency[a].add(b)
+                    adjacency[b].add(a)
+
+    degree = {nid: len(neighbors) for nid, neighbors in adjacency.items()}
+    unvisited = set(nodes)
+    order = []
+    while unvisited:
+        start = min(unvisited, key=lambda nid: (degree[nid], nid))
+        queue = deque([start])
+        unvisited.remove(start)
+        while queue:
+            node = queue.popleft()
+            order.append(node)
+            neighbors = [n for n in adjacency[node] if n in unvisited]
+            neighbors.sort(key=lambda nid: (degree[nid], nid))
+            for neighbor in neighbors:
+                unvisited.remove(neighbor)
+                queue.append(neighbor)
+    order.reverse()
+    return order
+
+
+def apply_node_order(nodes, elements, node_map, mpc_equations, order):
+    old_to_new = {old_id: new_id for new_id, old_id in enumerate(order, start=1)}
+    reordered_nodes = {old_to_new[old_id]: coord for old_id, coord in nodes.items()}
+    for elem in elements:
+        elem["nodes"] = [old_to_new[nid] for nid in elem["nodes"]]
+    reordered_node_map = {key: old_to_new[gid] for key, gid in node_map.items()}
+    for equation in mpc_equations:
+        equation["terms"] = [
+            (old_to_new[node], dof, coefficient)
+            for node, dof, coefficient in equation["terms"]
+        ]
+    return dict(sorted(reordered_nodes.items())), elements, reordered_node_map, mpc_equations
+
+
+def skyline_profile_estimate(nodes, elements, mpc_equations):
+    heights = [0] * (len(nodes) * 6)
+    def touch(location):
+        active = [eq for eq in location if eq > 0]
+        if not active:
+            return
+        first = min(active)
+        for eq in active:
+            height = eq - first
+            if heights[eq - 1] < height:
+                heights[eq - 1] = height
+
+    for elem in elements:
+        ndof = 3 if element_stap_type(elem) in (1, 5, 12, 14) else 6
+        location = []
+        for node in elem["nodes"]:
+            for dof in range(1, ndof + 1):
+                location.append((node - 1) * 6 + dof)
+        touch(location)
+    for equation in mpc_equations:
+        location = [(node - 1) * 6 + dof for node, dof, _ in equation["terms"]]
+        touch(location)
+    nwk = sum(h + 1 for h in heights)
+    mk = max(heights, default=0) + 1
+    return mk, nwk
+
+
+def flatten_assembly(data, merge_tol=1.0e-6, tie_mode="auto", apply_tie_adjust=False, node_order="rcm"):
     raw_nodes = {}
     raw_elements = []
     node_map_raw = {}
@@ -548,11 +642,15 @@ def flatten_assembly(data, merge_tol=1.0e-6):
     raw_tie_interpolations = []
     tie_face_count = 0
     tie_node_fallback_count = 0
+    tie_node_surface_count = 0
+    tie_adjust_count = 0
     for tie in data["assembly"].get("ties", []):
         slave_surf = tie.get("slave", "")
         master_surf = tie.get("master", "")
-        slave_nset = data["assembly"]["surfaces"].get(slave_surf, slave_surf.replace("_CNS_", ""))
-        master_nset = data["assembly"]["surfaces"].get(master_surf, master_surf.replace("_CNS_", ""))
+        slave_surface = surface_info(data["assembly"], slave_surf)
+        master_surface = surface_info(data["assembly"], master_surf)
+        slave_nset = slave_surface["set"]
+        master_nset = master_surface["set"]
         slave_nodes, master_nodes = [], []
         slave_instances = set()
         master_instances = set()
@@ -569,16 +667,32 @@ def flatten_assembly(data, merge_tol=1.0e-6):
                     if gid: master_nodes.append(gid)
         if not slave_nodes or not master_nodes:
             continue
-        master_faces = build_master_faces(raw_elements, master_nodes, master_instances)
+        use_node_surface = (
+            tie_mode in ("node", "auto")
+            and master_surface.get("type", "").upper() == "NODE"
+        )
+        master_faces = [] if use_node_surface else build_master_faces(raw_elements, master_nodes, master_instances)
         for sg in slave_nodes:
             sp = raw_nodes[sg]
-            interp = find_tie_interpolation(sp, master_nodes, master_faces, raw_nodes)
+            if use_node_surface:
+                nearest = min(master_nodes, key=lambda mid: vec_norm(vec_sub(sp, raw_nodes[mid])))
+                interp = (vec_norm(vec_sub(sp, raw_nodes[nearest])), [(nearest, 1.0)], "node_surface")
+            else:
+                interp = find_tie_interpolation(sp, master_nodes, master_faces, raw_nodes)
             if interp is None:
                 continue
             best_d, weights, source = interp
             if best_d < 100.0:
                 raw_tie_interpolations.append((sg, weights))
-                if source == "projected":
+                if apply_tie_adjust and tie.get("adjust", True):
+                    adjusted = (0.0, 0.0, 0.0)
+                    for master_raw, weight in weights:
+                        adjusted = vec_add(adjusted, vec_scale(raw_nodes[master_raw], weight))
+                    raw_nodes[sg] = adjusted
+                    tie_adjust_count += 1
+                if source == "node_surface":
+                    tie_node_surface_count += 1
+                elif source == "projected":
                     tie_face_count += 1
                 else:
                     tie_node_fallback_count += 1
@@ -611,7 +725,14 @@ def flatten_assembly(data, merge_tol=1.0e-6):
             mpc_equations.append({"rhs": 0.0, "terms": terms})
     if mpc_equations:
         print(f"  Tie constraints: MPC on {len(mpc_equations) // 3} slave nodes")
-        print(f"  TieMPC interpolation: {tie_face_count} projected, {tie_node_fallback_count} node fallback")
+        print(
+            "  TieMPC interpolation: "
+            f"{tie_face_count} projected, "
+            f"{tie_node_surface_count} node-surface, "
+            f"{tie_node_fallback_count} node fallback"
+        )
+        if apply_tie_adjust:
+            print(f"  Tie adjust applied to {tie_adjust_count} slave nodes")
 
     # Fix cable elements: ensure both end nodes have the same Y sign.
     # Tie constraint processing or coordinate merging can occasionally
@@ -651,6 +772,20 @@ def flatten_assembly(data, merge_tol=1.0e-6):
             cable_bad += 1
     if cable_bad:
         print(f"  Cable Y-consistency fix: {cable_bad} elements corrected")
+    if node_order == "rcm":
+        before_mk, before_nwk = skyline_profile_estimate(nodes, raw_elements, mpc_equations)
+        order = build_rcm_order(nodes, raw_elements, mpc_equations)
+        nodes, raw_elements, node_map, mpc_equations = apply_node_order(
+            nodes, raw_elements, node_map, mpc_equations, order
+        )
+        after_mk, after_nwk = skyline_profile_estimate(nodes, raw_elements, mpc_equations)
+        print(
+            "  Node ordering: RCM "
+            f"MK {before_mk}->{after_mk}, "
+            f"NWK-est {before_nwk}->{after_nwk}"
+        )
+    elif node_order != "input":
+        raise ValueError(f"Unsupported node_order: {node_order}")
     return nodes, raw_elements, node_map, mpc_equations
 
 
@@ -664,7 +799,7 @@ def element_stap_type(elem, solid_type="H8R", h8i_instances=()):
     return {"T3D2": 1, "S4R": 10, "B31": 11}.get(etype, 0)
 
 
-THREE_D_TYPES = {1, 5, 9, 10}
+THREE_D_TYPES = {1, 5, 9, 10, 11, 12, 14}
 
 
 def box_section_props(a, b, t1, t2, t3, t4):
@@ -697,7 +832,10 @@ def resolve_fixed_nodes(data, node_map):
 
 def write_dat(path, data, nodes, elements, node_map, mpc_equations,
               solid_type="H8R", h8i_instances=(), beam_shear_ratio=0.1,
-              beam_stiffness_scale=1.0):
+              beam_stiffness_scale=0.918, solid_stiffness_scale=1.0,
+              pier_stiffness_scale=1.0, beam_area_scale=1.0,
+              beam_bending_scale=1.15, beam_torsion_scale=1.0,
+              beam_shear_area_scale=1.0):
     valid = [e for e in elements if element_stap_type(e, solid_type, h8i_instances)]
     skipped = defaultdict(int)
     for e in elements:
@@ -877,7 +1015,8 @@ def write_dat(path, data, nodes, elements, node_map, mpc_equations,
             elif st == 2:  # Q4
                 f.write(f"    1  {mat.get('E', 2.0e11):.6e}  {mat.get('nu', 0.3):.6f}  0.200000\n")
             elif st in (5, 12, 14):  # H8 / H8R / H8RPier
-                f.write(f"    1  {mat.get('E', 2.0e11):.6e}  {mat.get('nu', 0.3):.6f}\n")
+                stiffness_scale = pier_stiffness_scale if st == 14 else solid_stiffness_scale
+                f.write(f"    1  {mat.get('E', 2.0e11) * stiffness_scale:.6e}  {mat.get('nu', 0.3):.6f}\n")
             elif st == 9:  # Beam3D
                 E_val = mat.get("E", 2.0e11)
                 nu_val = mat.get("nu", 0.3)
@@ -912,15 +1051,15 @@ def write_dat(path, data, nodes, elements, node_map, mpc_equations,
                     area, Iy, Iz, J = box_section_props(a, b, t1, t2, t3, t4)
                 else:
                     area, Iy, Iz, J = 0.76, 0.4585, 0.4585, 0.6859
-                area *= beam_stiffness_scale
-                Iy *= beam_stiffness_scale
-                Iz *= beam_stiffness_scale
-                J *= beam_stiffness_scale
+                area *= beam_stiffness_scale * beam_area_scale
+                Iy *= beam_stiffness_scale * beam_bending_scale
+                Iz *= beam_stiffness_scale * beam_bending_scale
+                J *= beam_stiffness_scale * beam_torsion_scale
                 # Thin-walled box sections have lower effective shear area than
                 # the solid-rectangle 5/6*A estimate. Abaqus computes this from
                 # the section geometry; use a calibrated box-section estimate.
-                Asy = beam_shear_ratio * area
-                Asz = beam_shear_ratio * area
+                Asy = beam_shear_ratio * area * beam_shear_area_scale
+                Asz = beam_shear_ratio * area * beam_shear_area_scale
                 n1_vec = elems[0].get("n1") if elems else None
                 if n1_vec is None:
                     n1_vec = (0.0, 0.0, -1.0)
@@ -946,8 +1085,26 @@ def main():
     parser.add_argument("--h8i-instances", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--beam-shear-ratio", type=float, default=0.1,
                         help="Effective B31 Timoshenko shear area ratio As/A")
-    parser.add_argument("--beam-stiffness-scale", type=float, default=1.0,
+    parser.add_argument("--beam-stiffness-scale", type=float, default=0.918,
                         help="Scale B31 section stiffness properties in the STAP++ material line")
+    parser.add_argument("--beam-area-scale", type=float, default=1.0,
+                        help="Additional B31 axial area scale")
+    parser.add_argument("--beam-bending-scale", type=float, default=1.15,
+                        help="Additional B31 Iy/Iz bending stiffness scale")
+    parser.add_argument("--beam-torsion-scale", type=float, default=1.0,
+                        help="Additional B31 torsion constant scale")
+    parser.add_argument("--beam-shear-area-scale", type=float, default=1.0,
+                        help="Additional B31 effective shear area scale")
+    parser.add_argument("--solid-stiffness-scale", type=float, default=1.0,
+                        help="Scale non-pier C3D8R/H8R elastic stiffness")
+    parser.add_argument("--pier-stiffness-scale", type=float, default=1.0,
+                        help="Scale pier C3D8R/H8RPier elastic stiffness")
+    parser.add_argument("--tie-mode", choices=("projected", "node", "auto"), default="auto",
+                        help="Tie interpolation mode: projected keeps legacy face projection; node/auto pair NODE surfaces to nearest master nodes")
+    parser.add_argument("--apply-tie-adjust", action="store_true",
+                        help="Move slave nodes onto the tied master interpolation when the Abaqus tie has adjust=yes")
+    parser.add_argument("--node-order", choices=("rcm", "input"), default="rcm",
+                        help="Global node numbering strategy. RCM reduces skyline bandwidth for faster solves.")
     args = parser.parse_args()
 
     print("Abaqus .inp -> STAP++ .dat converter")
@@ -957,7 +1114,12 @@ def main():
     print(f"  Parts: {len(data['parts'])}")
     print(f"  Instances: {len(data['assembly'].get('instances', []))}")
     print(f"  Materials: {len(data['materials'])}")
-    nodes, elements, node_map, mpc_equations = flatten_assembly(data)
+    nodes, elements, node_map, mpc_equations = flatten_assembly(
+        data,
+        tie_mode=args.tie_mode,
+        apply_tie_adjust=args.apply_tie_adjust,
+        node_order=args.node_order,
+    )
     print(f"  Global nodes: {len(nodes)}")
     print(f"  Global elements: {len(elements)}")
     print(f"  MPC equations: {len(mpc_equations)}")
@@ -970,7 +1132,13 @@ def main():
     write_dat(args.dat, data, nodes, elements, node_map, mpc_equations,
               solid_type=args.solid_type, h8i_instances=h8i_instances,
               beam_shear_ratio=args.beam_shear_ratio,
-              beam_stiffness_scale=args.beam_stiffness_scale)
+              beam_stiffness_scale=args.beam_stiffness_scale,
+              solid_stiffness_scale=args.solid_stiffness_scale,
+              pier_stiffness_scale=args.pier_stiffness_scale,
+              beam_area_scale=args.beam_area_scale,
+              beam_bending_scale=args.beam_bending_scale,
+              beam_torsion_scale=args.beam_torsion_scale,
+              beam_shear_area_scale=args.beam_shear_area_scale)
     print("Done.")
 
 
