@@ -85,6 +85,9 @@ public:
     //! Read element group data from stream Input
     bool Read(ifstream& Input);
 
+    //! Read element group data after its header has already been parsed
+    bool Read(ifstream& Input, int ElementType, unsigned int NUME, unsigned int NUMMAT);
+
     //! Calculate the size of the derived element class and material class
     void CalculateMemberSize();
 

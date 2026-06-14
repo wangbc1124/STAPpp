@@ -95,7 +95,7 @@ def summarize(rows, top_n):
 def main():
     parser = argparse.ArgumentParser(description="Compare Bridge-1 Abaqus and STAP++ U3 by instance node map.")
     parser.add_argument("--inp", default="abaqus/Bridge-1.inp")
-    parser.add_argument("--out", default="Bridge-1/Bridge-1-mpc.out")
+    parser.add_argument("--out", default="Bridge-1/Bridge-1.out")
     parser.add_argument("--odb-displacements", default="abaqus/odb_displacements.csv")
     parser.add_argument("--top", type=int, default=5)
     args = parser.parse_args()

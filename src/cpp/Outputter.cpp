@@ -35,6 +35,7 @@ COutputter* COutputter::_instance = nullptr;
 
 //	Constructor
 COutputter::COutputter(string FileName)
+    : SummaryMode(false)
 {
 	OutputFile.open(FileName);
 
@@ -95,6 +96,9 @@ void COutputter::OutputNodeInfo()
 		  << "         EQ.1, EXECUTION" << endl
 		  << endl;
 
+    if (SummaryMode)
+        return;
+
 	*this << " N O D A L   P O I N T   D A T A" << endl << endl;
 	*this << "    NODE       BOUNDARY                         NODAL POINT" << endl
 		  << "   NUMBER  CONDITION  CODES                     COORDINATES" << endl;
@@ -108,6 +112,9 @@ void COutputter::OutputNodeInfo()
 //	Output equation numbers
 void COutputter::OutputEquationNumber()
 {
+    if (SummaryMode)
+        return;
+
 	CDomain* FEMData = CDomain::GetInstance();
 	unsigned int NUMNP = FEMData->GetNUMNP();
 
@@ -127,6 +134,9 @@ void COutputter::OutputEquationNumber()
 //	Output element data
 void COutputter::OutputElementInfo()
 {
+    if (SummaryMode)
+        return;
+
 	//	Print element group control line
 
 	CDomain* FEMData = CDomain::GetInstance();
@@ -314,6 +324,9 @@ void COutputter::OutputQ4Elements(unsigned int EleGrp)
 //	Print load data
 void COutputter::OutputLoadInfo()
 {
+    if (SummaryMode)
+        return;
+
 	CDomain* FEMData = CDomain::GetInstance();
 
 	for (unsigned int lcase = 1; lcase <= FEMData->GetNLCASE(); lcase++)
@@ -339,6 +352,9 @@ void COutputter::OutputLoadInfo()
 //	Print nodal displacement
 void COutputter::OutputNodalDisplacement()
 {
+    if (SummaryMode)
+        return;
+
 	CDomain* FEMData = CDomain::GetInstance();
 	CNode* NodeList = FEMData->GetNodeList();
 	double* Displacement = FEMData->GetDisplacement();
@@ -358,6 +374,9 @@ void COutputter::OutputNodalDisplacement()
 //	Calculate stresses
 void COutputter::OutputElementStress()
 {
+    if (SummaryMode)
+        return;
+
 	CDomain* FEMData = CDomain::GetInstance();
 
 	double* Displacement = FEMData->GetDisplacement();

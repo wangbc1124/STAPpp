@@ -26,6 +26,7 @@ Supports all element types:
 import re
 import sys
 import os
+import math
 
 # ── VTK cell type constants ───────────────────────────────────────────
 VTK_LINE       = 3
@@ -415,7 +416,13 @@ def write_vtk(result, outpath):
                 for rx, ry, rz in rots:
                     f.write(f'  {rx:14.6e} {ry:14.6e} {rz:14.6e}\n')
         elem_types = result.get('elem_group_types', [])
-        has_stress = bool(result['stresses'])
+        stress_data = _collect_stress_data(result, num_cells)
+        has_stress = bool(stress_data[0])
+        if has_stress:
+            if not has_point_data:
+                f.write(f'\nPOINT_DATA {num_nodes}\n')
+                has_point_data = True
+            _write_recovered_point_stress_data(f, nodes, elements, stress_data)
         if len(elem_types) > 1 or has_stress:
             f.write(f'\nCELL_DATA {num_cells}\n')
         if len(elem_types) > 1:
@@ -430,17 +437,11 @@ def write_vtk(result, outpath):
 
         # ── Cell data: stresses (per-group) ──
         if has_stress:
-            _write_stress_data(f, result, num_cells, header_already_written=(len(elem_types) > 1))
+            _write_stress_data(f, stress_data, num_cells, header_already_written=(len(elem_types) > 1))
 
 
-def _write_stress_data(f, result, num_cells, header_already_written=False):
-    """Write stress data to VTK, handling mixed element types.
-
-    Each element group has its own stress block with its own set of
-    components.  We merge them into a combined CELL_DATA section,
-    emitting the union of all stress component names with zeros for
-    groups that don't have a given component.
-    """
+def _collect_stress_data(result, num_cells):
+    """Collect mixed element-group stresses into per-cell dictionaries."""
     etypes = result.get('elem_type_by_group', [])
     counts = result.get('elem_count_by_group', [])
 
@@ -458,12 +459,6 @@ def _write_stress_data(f, result, num_cells, header_already_written=False):
             if n not in seen:
                 all_names.append(n)
                 seen.add(n)
-
-    if not all_names:
-        return
-
-    if not header_already_written:
-        f.write(f'CELL_DATA {num_cells}\n')
 
     # Build per-cell stress map: cell_idx -> {name: value}
     cell_stress = [{} for _ in range(num_cells)]
@@ -487,6 +482,18 @@ def _write_stress_data(f, result, num_cells, header_already_written=False):
             offset += counts[gidx]
         else:
             offset += max(stress_dict.keys()) + 1 if stress_dict else 0
+
+    return all_names, cell_stress
+
+
+def _write_stress_data(f, stress_data, num_cells, header_already_written=False):
+    """Write original per-cell stress data to VTK."""
+    all_names, cell_stress = stress_data
+    if not all_names:
+        return
+
+    if not header_already_written:
+        f.write(f'CELL_DATA {num_cells}\n')
 
     for name in all_names:
         f.write(f'SCALARS {name} float 1\n')
@@ -528,6 +535,167 @@ def _write_stress_data(f, result, num_cells, header_already_written=False):
         f.write(f'  {sx:14.6e} {txy:14.6e} {tzx:14.6e}\n')
         f.write(f'  {txy:14.6e} {sy:14.6e} {tyz:14.6e}\n')
         f.write(f'  {tzx:14.6e} {tyz:14.6e} {sz:14.6e}\n')
+
+
+def _write_recovered_point_stress_data(f, nodes, elements, stress_data):
+    """Write superconvergent patch recovered nodal stresses."""
+    all_names, cell_stress = stress_data
+    if not all_names:
+        return
+
+    recovered = _recover_nodal_stress_patch(nodes, elements, all_names, cell_stress)
+
+    for name in all_names:
+        f.write(f'SCALARS SPR_{name} float 1\n')
+        f.write('LOOKUP_TABLE default\n')
+        for stress in recovered:
+            f.write(f'  {stress.get(name, 0.0):14.6e}\n')
+
+    f.write('SCALARS SPR_Von_Mises float 1\n')
+    f.write('LOOKUP_TABLE default\n')
+    for stress in recovered:
+        f.write(f'  {_von_mises(stress):14.6e}\n')
+
+    sigma_components = [
+        ('SPR_Sigma-Magnitude', lambda s: _von_mises(s)),
+        ('SPR_Sigma-s11', lambda s: _stress_tensor_components(s)[0]),
+        ('SPR_Sigma-s22', lambda s: _stress_tensor_components(s)[1]),
+        ('SPR_Sigma-s33', lambda s: _stress_tensor_components(s)[2]),
+        ('SPR_Sigma-s12', lambda s: _stress_tensor_components(s)[3]),
+        ('SPR_Sigma-s23', lambda s: _stress_tensor_components(s)[4]),
+        ('SPR_Sigma-s13', lambda s: _stress_tensor_components(s)[5]),
+    ]
+    for name, getter in sigma_components:
+        f.write(f'SCALARS {name} float 1\n')
+        f.write('LOOKUP_TABLE default\n')
+        for stress in recovered:
+            f.write(f'  {getter(stress):14.6e}\n')
+
+    f.write('TENSORS SPR_Sigma float\n')
+    for stress in recovered:
+        sx, sy, sz, txy, tyz, tzx = _stress_tensor_components(stress)
+        f.write(f'  {sx:14.6e} {txy:14.6e} {tzx:14.6e}\n')
+        f.write(f'  {txy:14.6e} {sy:14.6e} {tyz:14.6e}\n')
+        f.write(f'  {tzx:14.6e} {tyz:14.6e} {sz:14.6e}\n')
+
+
+def _recover_nodal_stress_patch(nodes, elements, all_names, cell_stress):
+    centers = _cell_centers(nodes, elements)
+    node_to_cells = [[] for _ in nodes]
+    for ci, elem in enumerate(elements):
+        for ni in elem['connectivity']:
+            if 0 <= ni < len(node_to_cells):
+                node_to_cells[ni].append(ci)
+
+    recovered = []
+    for ni, point in enumerate(nodes):
+        patch = node_to_cells[ni]
+        node_stress = {}
+        for name in all_names:
+            samples = [
+                (centers[ci], cell_stress[ci][name])
+                for ci in patch
+                if ci < len(cell_stress) and name in cell_stress[ci]
+            ]
+            if samples:
+                node_stress[name] = _fit_patch_value(point, samples)
+        recovered.append(node_stress)
+    return recovered
+
+
+def _cell_centers(nodes, elements):
+    centers = []
+    for elem in elements:
+        conn = [ni for ni in elem['connectivity'] if 0 <= ni < len(nodes)]
+        if not conn:
+            centers.append((0.0, 0.0, 0.0))
+            continue
+        inv = 1.0 / len(conn)
+        centers.append((
+            sum(nodes[ni][0] for ni in conn) * inv,
+            sum(nodes[ni][1] for ni in conn) * inv,
+            sum(nodes[ni][2] for ni in conn) * inv,
+        ))
+    return centers
+
+
+def _fit_patch_value(point, samples):
+    if len(samples) < 4:
+        return _weighted_average(point, samples)
+
+    x0 = sum(p[0] for p, _ in samples) / len(samples)
+    y0 = sum(p[1] for p, _ in samples) / len(samples)
+    z0 = sum(p[2] for p, _ in samples) / len(samples)
+    scale = max(
+        math.sqrt((p[0] - x0) ** 2 + (p[1] - y0) ** 2 + (p[2] - z0) ** 2)
+        for p, _ in samples
+    )
+    if scale <= 1.0e-20:
+        return _weighted_average(point, samples)
+
+    normal = [[0.0] * 4 for _ in range(4)]
+    rhs = [0.0] * 4
+    for p, value in samples:
+        basis = [
+            1.0,
+            (p[0] - x0) / scale,
+            (p[1] - y0) / scale,
+            (p[2] - z0) / scale,
+        ]
+        distance = math.sqrt((p[0] - point[0]) ** 2 + (p[1] - point[1]) ** 2 + (p[2] - point[2]) ** 2)
+        weight = 1.0 / max(distance, scale * 1.0e-6)
+        for i in range(4):
+            rhs[i] += weight * basis[i] * value
+            for j in range(4):
+                normal[i][j] += weight * basis[i] * basis[j]
+
+    coeff = _solve_linear_system(normal, rhs)
+    if coeff is None:
+        return _weighted_average(point, samples)
+
+    basis = [
+        1.0,
+        (point[0] - x0) / scale,
+        (point[1] - y0) / scale,
+        (point[2] - z0) / scale,
+    ]
+    return sum(coeff[i] * basis[i] for i in range(4))
+
+
+def _weighted_average(point, samples):
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for p, value in samples:
+        distance = math.sqrt((p[0] - point[0]) ** 2 + (p[1] - point[1]) ** 2 + (p[2] - point[2]) ** 2)
+        weight = 1.0 / max(distance, 1.0e-12)
+        weighted_sum += weight * value
+        weight_total += weight
+    if weight_total <= 0.0:
+        return samples[0][1]
+    return weighted_sum / weight_total
+
+
+def _solve_linear_system(matrix, rhs):
+    n = len(rhs)
+    a = [row[:] + [rhs[i]] for i, row in enumerate(matrix)]
+    for col in range(n):
+        pivot = max(range(col, n), key=lambda r: abs(a[r][col]))
+        if abs(a[pivot][col]) < 1.0e-18:
+            return None
+        if pivot != col:
+            a[col], a[pivot] = a[pivot], a[col]
+        inv_pivot = 1.0 / a[col][col]
+        for j in range(col, n + 1):
+            a[col][j] *= inv_pivot
+        for r in range(n):
+            if r == col:
+                continue
+            factor = a[r][col]
+            if factor == 0.0:
+                continue
+            for j in range(col, n + 1):
+                a[r][j] -= factor * a[col][j]
+    return [a[i][n] for i in range(n)]
 
 
 def _stress_tensor_components(stress):

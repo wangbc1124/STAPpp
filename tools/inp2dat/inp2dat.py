@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import math
+from pathlib import Path
 from collections import defaultdict
 from collections import deque
 
@@ -639,6 +640,10 @@ def flatten_assembly(data, merge_tol=1.0e-6, tie_mode="auto", apply_tie_adjust=F
     # Build raw tie interpolations. Abaqus assembly instances keep their own
     # nodes even when coordinates are coincident; connectivity between
     # instances must come from explicit constraints, not geometric node merging.
+    raw_rotational_nodes = set()
+    for elem in raw_elements:
+        if elem["type"] in ("S4R", "B31"):
+            raw_rotational_nodes.update(elem["nodes"])
     raw_tie_interpolations = []
     tie_face_count = 0
     tie_node_fallback_count = 0
@@ -683,7 +688,12 @@ def flatten_assembly(data, merge_tol=1.0e-6, tie_mode="auto", apply_tie_adjust=F
                 continue
             best_d, weights, source = interp
             if best_d < 100.0:
-                raw_tie_interpolations.append((sg, weights))
+                use_rigid_rotation = (
+                    source == "node_surface"
+                    and len(weights) == 1
+                    and weights[0][0] in raw_rotational_nodes
+                )
+                raw_tie_interpolations.append((sg, weights, use_rigid_rotation))
                 if apply_tie_adjust and tie.get("adjust", True):
                     adjusted = (0.0, 0.0, 0.0)
                     for master_raw, weight in weights:
@@ -706,7 +716,8 @@ def flatten_assembly(data, merge_tol=1.0e-6, tie_mode="auto", apply_tie_adjust=F
 
     node_map = {key: old_to_new[old] for key, old in node_map_raw.items()}
     mpc_equations = []
-    for slave_raw, master_weights_raw in raw_tie_interpolations:
+    rigid_tie_count = 0
+    for slave_raw, master_weights_raw, use_rigid_rotation in raw_tie_interpolations:
         slave_gid = old_to_new.get(slave_raw)
         if not slave_gid:
             continue
@@ -717,6 +728,44 @@ def flatten_assembly(data, merge_tol=1.0e-6, tie_mode="auto", apply_tie_adjust=F
                 weights.append((master_gid, weight))
         if not weights:
             continue
+
+        if use_rigid_rotation and len(weights) == 1:
+            master_gid, weight = weights[0]
+            if abs(weight - 1.0) <= 1.0e-12:
+                sx, sy, sz = nodes[slave_gid]
+                mx, my, mz = nodes[master_gid]
+                rx = sx - mx
+                ry = sy - my
+                rz = sz - mz
+                mpc_equations.append({
+                    "rhs": 0.0,
+                    "terms": [
+                        (slave_gid, 1, 1.0),
+                        (master_gid, 1, -1.0),
+                        (master_gid, 5, -rz),
+                        (master_gid, 6, ry),
+                    ],
+                })
+                mpc_equations.append({
+                    "rhs": 0.0,
+                    "terms": [
+                        (slave_gid, 2, 1.0),
+                        (master_gid, 2, -1.0),
+                        (master_gid, 4, rz),
+                        (master_gid, 6, -rx),
+                    ],
+                })
+                mpc_equations.append({
+                    "rhs": 0.0,
+                    "terms": [
+                        (slave_gid, 3, 1.0),
+                        (master_gid, 3, -1.0),
+                        (master_gid, 4, -ry),
+                        (master_gid, 5, rx),
+                    ],
+                })
+                rigid_tie_count += 1
+                continue
 
         for dof in (1, 2, 3):
             terms = [(slave_gid, dof, 1.0)]
@@ -731,6 +780,8 @@ def flatten_assembly(data, merge_tol=1.0e-6, tie_mode="auto", apply_tie_adjust=F
             f"{tie_node_surface_count} node-surface, "
             f"{tie_node_fallback_count} node fallback"
         )
+        if rigid_tie_count:
+            print(f"  TieMPC rigid rotation offsets: {rigid_tie_count} node-surface ties")
         if apply_tie_adjust:
             print(f"  Tie adjust applied to {tie_adjust_count} slave nodes")
 
@@ -830,12 +881,131 @@ def resolve_fixed_nodes(data, node_map):
     return dict(fixed)
 
 
+def build_assembly_nset_lookup(data):
+    lookup = defaultdict(set)
+    for nset in data["assembly"].get("nsets", []):
+        instance = nset.get("instance") or ""
+        for local_id in nset.get("numbers", []):
+            lookup[(instance, int(local_id))].add(nset["name"])
+    return lookup
+
+
+def collect_supportbeam_floor_rotation_fix_nodes(data, node_map):
+    nset_lookup = build_assembly_nset_lookup(data)
+    surface_map = data["assembly"].get("surfaces", {})
+    fix_nodes = set()
+
+    def surface_set_name(surface_name):
+        raw = surface_map.get(surface_name)
+        if isinstance(raw, dict):
+            return raw.get("set", "")
+        if raw:
+            return raw
+        return surface_name.replace("_CNS_", "")
+
+    for tie in data["assembly"].get("ties", []):
+        if not tie.get("no_rotation", False):
+            continue
+        slave_set = surface_set_name(tie.get("slave", ""))
+        master_set = surface_set_name(tie.get("master", ""))
+        if not slave_set or not master_set:
+            continue
+        if not slave_set.startswith("s_Set-") or not master_set.startswith("m_Set-"):
+            continue
+        slave_matches = []
+        master_matches = []
+        for (instance, local_id), nset_names in nset_lookup.items():
+            if slave_set in nset_names and "SUPPORTBEAM" in instance.upper():
+                gid = node_map.get((instance, local_id))
+                if gid:
+                    slave_matches.append(gid)
+            if master_set in nset_names and "FLOOR" in instance.upper():
+                gid = node_map.get((instance, local_id))
+                if gid:
+                    master_matches.append(gid)
+        if slave_matches and master_matches:
+            fix_nodes.update(slave_matches)
+    return fix_nodes
+
+
+def collect_tie_instance_nodes(data, node_map, instance_tokens):
+    nset_lookup = build_assembly_nset_lookup(data)
+    surface_map = data["assembly"].get("surfaces", {})
+    tokens = tuple(token.upper() for token in instance_tokens if token)
+    fix_nodes = set()
+
+    def surface_set_name(surface_name):
+        raw = surface_map.get(surface_name)
+        if isinstance(raw, dict):
+            return raw.get("set", "")
+        if raw:
+            return raw
+        return surface_name.replace("_CNS_", "")
+
+    for tie in data["assembly"].get("ties", []):
+        for surface_name in (tie.get("slave", ""), tie.get("master", "")):
+            set_name = surface_set_name(surface_name)
+            if not set_name:
+                continue
+            for (instance, local_id), nset_names in nset_lookup.items():
+                if set_name not in nset_names:
+                    continue
+                inst_upper = instance.upper()
+                if tokens and not any(token in inst_upper for token in tokens):
+                    continue
+                gid = node_map.get((instance, local_id))
+                if gid:
+                    fix_nodes.add(gid)
+    return fix_nodes
+
+
+def apply_supportbeam_floor_rotation_mode(bc, mode):
+    if mode in ("fix-beam-rotations", "fix-r123"):
+        bc[3] = bc[4] = bc[5] = 1
+    elif mode == "fix-r12":
+        bc[3] = bc[4] = 1
+    elif mode == "fix-r3":
+        bc[5] = 1
+
+
+def apply_shell_tie_rotation_mode(bc, mode):
+    if mode == "fix-r123":
+        bc[3] = bc[4] = bc[5] = 1
+    elif mode == "fix-rz":
+        bc[5] = 1
+
+
+def collect_shell4_boundary_nodes(elements):
+    edge_count = defaultdict(int)
+    edge_nodes = {}
+    for elem in elements:
+        if element_stap_type(elem) != 10:
+            continue
+        conn = elem["nodes"]
+        if len(conn) != 4:
+            continue
+        for a, b in ((conn[0], conn[1]), (conn[1], conn[2]), (conn[2], conn[3]), (conn[3], conn[0])):
+            key = tuple(sorted((a, b)))
+            edge_count[key] += 1
+            edge_nodes[key] = (a, b)
+    boundary = set()
+    for key, count in edge_count.items():
+        if count == 1:
+            boundary.update(edge_nodes[key])
+    return boundary
+
+
 def write_dat(path, data, nodes, elements, node_map, mpc_equations,
               solid_type="H8R", h8i_instances=(), beam_shear_ratio=0.1,
               beam_stiffness_scale=0.918, solid_stiffness_scale=1.0,
               pier_stiffness_scale=1.0, beam_area_scale=1.0,
               beam_bending_scale=1.15, beam_torsion_scale=1.0,
-              beam_shear_area_scale=1.0):
+              beam_shear_area_scale=1.0, shared_rotation_mode="current",
+              supportbeam_floor_rotation_mode="current",
+              shell_tie_rotation_mode="current",
+              shell_tie_instance_tokens=("FLOOR",),
+              shell_boundary_rotation_mode="current",
+              title=None):
     valid = [e for e in elements if element_stap_type(e, solid_type, h8i_instances)]
     skipped = defaultdict(int)
     for e in elements:
@@ -868,16 +1038,44 @@ def write_dat(path, data, nodes, elements, node_map, mpc_equations,
     if orphan_nodes:
         print(f"  Orphan nodes (will be fully fixed): {len(orphan_nodes)}")
 
-    # Shell4 already carries drilling stabilization in the element stiffness.
-    # Preserve shell boundary rotations instead of adding artificial supports.
     shell4_boundary_fix = set()
-    print("  Shell4 boundary nodes (rotation-fixed): 0 (shell rotations preserved)")
+    if shell_boundary_rotation_mode in ("fix-rz", "fix-r123"):
+        shell4_boundary_fix = collect_shell4_boundary_nodes(valid)
+    print("  Shell4 boundary nodes (rotation mode={}): {}".format(
+        shell_boundary_rotation_mode, len(shell4_boundary_fix)))
 
     # Bar elements use only translational DOFs. Do not fix bar-node
     # translations here: cable endpoints may be tied to deck/tower nodes, and
     # fixing them would artificially lock the tied structure.
     bar_fix_nodes = {}
     print("  Bar-plane-fixed nodes: 0 (bar translations left free)")
+
+    supportbeam_floor_rotation_fix = set()
+    if supportbeam_floor_rotation_mode in ("fix-beam-rotations", "fix-r123", "fix-r12", "fix-r3"):
+        supportbeam_floor_rotation_fix = collect_supportbeam_floor_rotation_fix_nodes(data, node_map)
+    print("  SupportBeam-Floor tie nodes (rotation mode={}): {}".format(
+        supportbeam_floor_rotation_mode, len(supportbeam_floor_rotation_fix)))
+
+    shell_tie_rotation_fix = set()
+    if shell_tie_rotation_mode in ("fix-rz", "fix-r123"):
+        shell_tie_rotation_fix = collect_tie_instance_nodes(
+            data, node_map, shell_tie_instance_tokens
+        )
+    print("  Shell tie nodes (rotation mode={}): {}".format(
+        shell_tie_rotation_mode, len(shell_tie_rotation_fix)))
+
+    solid_types = {5, 12, 14}
+    beam_types = {9, 11}
+    h8_shell_nodes = {
+        nid for nid, types in node_types.items()
+        if types & solid_types and 10 in types
+    }
+    h8_beam_only_nodes = {
+        nid for nid, types in node_types.items()
+        if types & solid_types and types & beam_types and 10 not in types
+    }
+    print(f"  H8/Shell shared nodes (fix RZ only): {len(h8_shell_nodes)}")
+    print(f"  H8/Beam-only shared nodes (fix RX/RY/RZ): {len(h8_beam_only_nodes)}")
 
     # Gravity loads
     nodal_force = defaultdict(lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
@@ -959,8 +1157,12 @@ def write_dat(path, data, nodes, elements, node_map, mpc_equations,
     for e in valid:
         groups[(element_stap_type(e, solid_type, h8i_instances), e["type"], e["material"])].append(e)
 
+    out_parent = Path(path).parent
+    if str(out_parent) not in ("", "."):
+        out_parent.mkdir(parents=True, exist_ok=True)
+
     with open(path, "w", encoding="utf-8") as f:
-        f.write("Bridge-1: Cable-stayed bridge (3D conversion)\n")
+        f.write((title or "STAP++ model converted from Abaqus .inp") + "\n")
         f.write(f"{len(nodes)}  {len(groups)}  1  1\n")
         for nid in sorted(nodes):
             # Start with NDF=6 bc: translations from fixed set, rotations default=1
@@ -972,16 +1174,32 @@ def write_dat(path, data, nodes, elements, node_map, mpc_equations,
                     bc[dof] = 1
             # Shell4/Beam3D nodes: activate rotations
             types = node_types.get(nid, set())
-            if 10 in types or 9 in types or 11 in types:
-                if 5 in types and 11 in types and 10 not in types:
-                    # Keep beam-solid shared nodes translation-only, matching the
-                    # stable Bridge-1 baseline data used for Abaqus comparison.
-                    bc[3] = bc[4] = bc[5] = 1
-                elif nid in shell4_boundary_fix and 9 not in types and 11 not in types:
-                    # Shell4-only boundary: fix only drilling (rz), keep bending (rx,ry) active
+            has_solid = bool(types & solid_types)
+            has_beam = bool(types & beam_types)
+            has_shell = 10 in types
+            if has_shell or has_beam:
+                if nid in supportbeam_floor_rotation_fix:
+                    apply_supportbeam_floor_rotation_mode(bc, supportbeam_floor_rotation_mode)
+                elif has_shell and nid in shell_tie_rotation_fix:
+                    apply_shell_tie_rotation_mode(bc, shell_tie_rotation_mode)
+                elif has_solid and has_shell:
+                    # H8 has no rotational stiffness. At solid-shell shared
+                    # nodes, keep shell bending rotations but fix drilling RZ.
                     bc[3] = 0
                     bc[4] = 0
                     bc[5] = 1
+                elif has_solid and has_beam and not has_shell and shared_rotation_mode == "current":
+                    # Keep beam-solid shared nodes translation-only, matching the
+                    # stable Bridge-1 baseline data used for Abaqus comparison.
+                    bc[3] = bc[4] = bc[5] = 1
+                elif nid in shell4_boundary_fix and not has_beam:
+                    if shell_boundary_rotation_mode == "fix-r123":
+                        bc[3] = bc[4] = bc[5] = 1
+                    else:
+                        # Shell4-only boundary: fix only drilling (rz), keep bending (rx,ry) active
+                        bc[3] = 0
+                        bc[4] = 0
+                        bc[5] = 1
                 else:
                     # Shared H8-structure nodes keep shell/beam rotations active.
                     bc[3] = bc[4] = bc[5] = 0
@@ -1105,11 +1323,30 @@ def main():
                         help="Move slave nodes onto the tied master interpolation when the Abaqus tie has adjust=yes")
     parser.add_argument("--node-order", choices=("rcm", "input"), default="rcm",
                         help="Global node numbering strategy. RCM reduces skyline bandwidth for faster solves.")
+    parser.add_argument("--shared-rotation-mode", choices=("current", "free-beam-solid"), default="current",
+                        help="Experimental handling for rotations at shared solid/beam nodes.")
+    parser.add_argument("--supportbeam-floor-rotation-mode",
+                        choices=("current", "fix-beam-rotations", "fix-r123", "fix-r12", "fix-r3"),
+                        default="current",
+                        help="Experimental handling for supportbeam-floor tie rotations.")
+    parser.add_argument("--shell-tie-rotation-mode",
+                        choices=("current", "fix-rz", "fix-r123"),
+                        default="current",
+                        help="Experimental handling for shell instance rotations at Abaqus tie nodes.")
+    parser.add_argument("--shell-tie-instances",
+                        default="FLOOR",
+                        help="Comma-separated instance-name tokens affected by --shell-tie-rotation-mode.")
+    parser.add_argument("--shell-boundary-rotation-mode",
+                        choices=("current", "fix-rz", "fix-r123"),
+                        default="current",
+                        help="Experimental handling for shell-only boundary rotations.")
     args = parser.parse_args()
 
     print("Abaqus .inp -> STAP++ .dat converter")
     print(f"  Input : {args.inp}")
     print(f"  Output: {args.dat}")
+    model_name = Path(args.dat).stem or Path(args.inp).stem or "model"
+    dat_title = f"{model_name}: Abaqus .inp converted for STAP++"
     data = parse_inp(args.inp)
     print(f"  Parts: {len(data['parts'])}")
     print(f"  Instances: {len(data['assembly'].get('instances', []))}")
@@ -1129,6 +1366,7 @@ def main():
         print(f"  Solid mapping: C3D8R -> H8RPier for instances matching {h8i_instances}")
     else:
         print("  Solid mapping: C3D8R -> H8R")
+    shell_tie_tokens = tuple(x.strip() for x in args.shell_tie_instances.split(",") if x.strip())
     write_dat(args.dat, data, nodes, elements, node_map, mpc_equations,
               solid_type=args.solid_type, h8i_instances=h8i_instances,
               beam_shear_ratio=args.beam_shear_ratio,
@@ -1138,7 +1376,13 @@ def main():
               beam_area_scale=args.beam_area_scale,
               beam_bending_scale=args.beam_bending_scale,
               beam_torsion_scale=args.beam_torsion_scale,
-              beam_shear_area_scale=args.beam_shear_area_scale)
+              beam_shear_area_scale=args.beam_shear_area_scale,
+              shared_rotation_mode=args.shared_rotation_mode,
+              supportbeam_floor_rotation_mode=args.supportbeam_floor_rotation_mode,
+              shell_tie_rotation_mode=args.shell_tie_rotation_mode,
+              shell_tie_instance_tokens=shell_tie_tokens,
+              shell_boundary_rotation_mode=args.shell_boundary_rotation_mode,
+              title=dat_title)
     print("Done.")
 
 

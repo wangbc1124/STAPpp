@@ -47,6 +47,31 @@ private:
 		double rhs = 0.0;
 	};
 
+	struct CElementGroupHeader
+	{
+		bool pending = false;
+		int element_type = 0;
+		unsigned int nume = 0;
+		unsigned int nummat = 0;
+	};
+
+	struct CSparseAssemblyTiming
+	{
+		double pattern_time = 0.0;
+		double assembly_time = 0.0;
+		double element_assembly_time = 0.0;
+		double mpc_assembly_time = 0.0;
+		double element_stiffness_time = 0.0;
+		double pattern_insert_time = 0.0;
+		double value_insert_time = 0.0;
+		double active_dof_pack_time = 0.0;
+		double mpc_pattern_time = 0.0;
+		double export_upper_csr_time = 0.0;
+		unsigned long long element_count = 0;
+		unsigned long long element_value_insertions = 0;
+		unsigned long long mpc_value_insertions = 0;
+	};
+
 //!	The instance of the Domain class
 	static CDomain* _instance;
 
@@ -95,6 +120,15 @@ private:
 //! Penalty factor used for MPC enforcement
 	double ConstraintPenalty;
 
+//! Time spent converting simple MPC equations to aliases during input
+	double LastMpcAliasTime;
+
+//! Time spent in the last sparse CSR assembly
+	CSparseAssemblyTiming LastSparseAssemblyTiming;
+
+//! First element group header read while probing an optional MPC section
+	CElementGroupHeader PendingElementGroupHeader;
+
 //!	Banded stiffness matrix
 /*! A one-dimensional array storing only the elements below the	skyline of the 
     global stiffness matrix. */
@@ -128,6 +162,9 @@ public:
 //! Read optional MPC equations inserted by the preprocessor
 	bool ReadConstraintEquations();
 
+//! Convert simple two-term MPC equations into equation aliases
+	void ConvertSimpleMPCToAliases();
+
 //!	Read load case data
 	bool ReadLoadCases();
 
@@ -151,8 +188,26 @@ public:
 //!	Add penalty-form MPC contributions to the assembled stiffness matrix
 	void ApplyConstraintEquations();
 
+//! Assemble stiffness matrix into full CSR storage for iterative solvers
+	CCSRMatrix* AssembleSparseStiffnessMatrix(const std::string& backend_name = "standard");
+
+//! Assemble stiffness matrix into symmetric half storage for the PARDISO mainline
+	CSparseSymmetricMatrix* AssemblePardisoStiffnessMatrix();
+
+//! Add penalty-form MPC contributions to a sparse stiffness matrix
+	void ApplySparseConstraintEquations(CCSRMatrix& matrix, unsigned long long* insertion_count = 0);
+
 //!	Assemble the global nodal force vector for load case LoadCase
 	bool AssembleForce(unsigned int LoadCase); 
+
+//! Write nodal displacement results to CSV
+	bool WriteDisplacementCSV(const string& FileName);
+
+//! Resolve one nodal DOF displacement including alias backfill
+	double GetResolvedDisplacement(unsigned int node_index, unsigned int dof_index) const;
+
+//! Collect node-wise active equation blocks after BCs and aliasing
+	std::vector<std::vector<unsigned int> > BuildNodeEquationBlocks() const;
 
 //!	Return solution mode
 	inline unsigned int GetMODEX() { return MODEX; }
@@ -192,5 +247,25 @@ public:
 
 //!	Return pointer to the banded stiffness matrix
 	inline CSkylineMatrix<double>* GetStiffnessMatrix() { return StiffnessMatrix; }
+
+//! Return time spent converting simple MPC equations during the last input pass
+	inline double GetLastMpcAliasTime() const { return LastMpcAliasTime; }
+
+//! Return time spent building the last CSR sparsity pattern
+	inline double GetLastCsrPatternTime() const { return LastSparseAssemblyTiming.pattern_time; }
+
+//! Return time spent filling the last CSR values
+	inline double GetLastCsrAssemblyTime() const { return LastSparseAssemblyTiming.assembly_time; }
+	inline double GetLastElementCsrAssemblyTime() const { return LastSparseAssemblyTiming.element_assembly_time; }
+	inline double GetLastMpcCsrAssemblyTime() const { return LastSparseAssemblyTiming.mpc_assembly_time; }
+	inline double GetLastElementStiffnessTime() const { return LastSparseAssemblyTiming.element_stiffness_time; }
+	inline double GetLastPatternInsertTime() const { return LastSparseAssemblyTiming.pattern_insert_time; }
+	inline double GetLastValueInsertTime() const { return LastSparseAssemblyTiming.value_insert_time; }
+	inline double GetLastActiveDofPackTime() const { return LastSparseAssemblyTiming.active_dof_pack_time; }
+	inline double GetLastMpcPatternTime() const { return LastSparseAssemblyTiming.mpc_pattern_time; }
+	inline double GetLastExportUpperCsrTime() const { return LastSparseAssemblyTiming.export_upper_csr_time; }
+	inline unsigned long long GetLastElementCount() const { return LastSparseAssemblyTiming.element_count; }
+	inline unsigned long long GetLastElementValueInsertions() const { return LastSparseAssemblyTiming.element_value_insertions; }
+	inline unsigned long long GetLastMpcValueInsertions() const { return LastSparseAssemblyTiming.mpc_value_insertions; }
 
 };

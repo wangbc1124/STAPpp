@@ -24,6 +24,9 @@ private:
 //!	File stream for output
 	ofstream OutputFile;
 
+//! Summary mode skips large nodal/element/stress tables.
+	bool SummaryMode;
+
 //!	Designed as a single instance class
 	static COutputter* _instance;
 
@@ -34,6 +37,12 @@ public:
 
 //!	Return pointer to the output file stream
 	inline ofstream* GetOutputFile() { return &OutputFile; }
+
+//! Enable or disable summary output mode
+	inline void SetSummaryMode(bool enabled) { SummaryMode = enabled; }
+
+//! Return whether summary output mode is enabled
+	inline bool IsSummaryMode() const { return SummaryMode; }
 
 //!	Return the single instance of the class
 	static COutputter* GetInstance(string FileName = " ");

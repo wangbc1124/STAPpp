@@ -13,6 +13,7 @@ protected:
 	virtual double SRIHourglassBlend() const;
 	virtual double FBHourglassScale() const;
 	virtual bool UseOrthogonalHourglass() const;
+	virtual bool UseFastReducedIntegration() const;
 	virtual double OrthogonalHourglassScale() const;
 	virtual double OrthogonalHourglassDirectionScale(int direction) const;
 
@@ -32,6 +33,8 @@ public:
 //! stabilization, while exposing a distinct input type for Abaqus C3D8R.
 class CH8R : public CH8
 {
+protected:
+	virtual bool UseFastReducedIntegration() const;
 };
 
 //! H8RPier element class: local C3D8R-like trial for pier solids.
