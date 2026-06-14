@@ -83,14 +83,29 @@ void CElementGroup::CalculateMemberSize()
             MaterialSize_ = sizeof(CBeamMaterial);
             break;
         case ElementTypes::H8:
-            ElementSize_ = sizeof(CH8);
+        case ElementTypes::H8R:
+        case ElementTypes::H8RPier:
+            ElementSize_ = (ElementType_ == ElementTypes::H8R) ? sizeof(CH8R) :
+                ((ElementType_ == ElementTypes::H8RPier) ? sizeof(CH8RPier) : sizeof(CH8));
             MaterialSize_ = sizeof(CH8Material);
             break;
         case ElementTypes::Plate:
             ElementSize_ = sizeof(CPlate);
             MaterialSize_ = sizeof(CQ4Material);
             break;
-        default:
+        case ElementTypes::Beam3D:
+            ElementSize_ = sizeof(CBeam3D);
+            MaterialSize_ = sizeof(CBeam3DMaterial);
+            break;
+        case ElementTypes::Shell4:
+            ElementSize_ = sizeof(CShell4);
+            MaterialSize_ = sizeof(CQ4Material);
+            break;
+        case ElementTypes::Beam3DTimoshenko:
+            ElementSize_ = sizeof(CBeam3DTimoshenko);
+            MaterialSize_ = sizeof(CBeam3DTimoshenkoMaterial);
+            break;
+default:
             std::cerr << "Type " << ElementType_ << " not available. See CElementGroup::CalculateMemberSize." << std::endl;
             exit(5);
             break;
@@ -120,8 +135,23 @@ void CElementGroup::AllocateElements(std::size_t size)
         case ElementTypes::H8:
             ElementList_ = new CH8[size];
             break;
+        case ElementTypes::H8R:
+            ElementList_ = new CH8R[size];
+            break;
+        case ElementTypes::H8RPier:
+            ElementList_ = new CH8RPier[size];
+            break;
         case ElementTypes::Plate:
             ElementList_ = new CPlate[size];
+            break;
+        case ElementTypes::Beam3D:
+            ElementList_ = new CBeam3D[size];
+            break;
+        case ElementTypes::Shell4:
+            ElementList_ = new CShell4[size];
+            break;
+        case ElementTypes::Beam3DTimoshenko:
+            ElementList_ = new CBeam3DTimoshenko[size];
             break;
         default:
             std::cerr << "Type " << ElementType_ << " not available. See CElementGroup::AllocateElement." << std::endl;
@@ -141,7 +171,18 @@ void CElementGroup::AllocateMaterials(std::size_t size)
             MaterialList_ = new CBeamMaterial[size];
             break;
         case ElementTypes::H8:
+        case ElementTypes::H8R:
+        case ElementTypes::H8RPier:
             MaterialList_ = new CH8Material[size];
+            break;
+        case ElementTypes::Beam3D:
+            MaterialList_ = new CBeam3DMaterial[size];
+            break;
+        case ElementTypes::Beam3DTimoshenko:
+            MaterialList_ = new CBeam3DTimoshenkoMaterial[size];
+            break;
+        case ElementTypes::Shell4:
+            MaterialList_ = new CQ4Material[size];
             break;
         case ElementTypes::Q4:
         case ElementTypes::Q4R:
@@ -158,8 +199,19 @@ void CElementGroup::AllocateMaterials(std::size_t size)
 //! Read element group data from stream Input
 bool CElementGroup::Read(ifstream& Input)
 {
-    Input >> (int&)ElementType_ >> NUME_ >> NUMMAT_;
-    
+    int ElementType = 0;
+    unsigned int NUME = 0;
+    unsigned int NUMMAT = 0;
+    Input >> ElementType >> NUME >> NUMMAT;
+    return Read(Input, ElementType, NUME, NUMMAT);
+}
+
+bool CElementGroup::Read(ifstream& Input, int ElementType, unsigned int NUME, unsigned int NUMMAT)
+{
+    ElementType_ = static_cast<ElementTypes>(ElementType);
+    NUME_ = NUME;
+    NUMMAT_ = NUMMAT;
+
     CalculateMemberSize();
 
 //  Read material/section property lines

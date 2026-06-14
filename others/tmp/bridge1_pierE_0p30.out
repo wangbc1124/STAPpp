@@ -1,0 +1,51 @@
+TITLE : Bridge-1: Cable-stayed bridge (3D conversion)
+        (16:44:23 on June 14, 2026, Sunday)
+
+C O N T R O L   I N F O R M A T I O N
+
+      NUMBER OF NODAL POINTS . . . . . . . . . . (NUMNP)  =  4107
+      NUMBER OF ELEMENT GROUPS . . . . . . . . . (NUMEG)  =     5
+      NUMBER OF LOAD CASES . . . . . . . . . . . (NLCASE) =     1
+      SOLUTION MODE  . . . . . . . . . . . . . . (MODEX)  =     1
+         EQ.0, DATA CHECK
+         EQ.1, EXECUTION
+
+ Converted simple MPC equations to DOF aliases: 66
+ Remaining penalty MPC equations: 0
+
+	TOTAL SYSTEM DATA
+
+     NUMBER OF EQUATIONS . . . . . . . . . . . . . .(NEQ) = 15122
+     NUMBER OF MATRIX ELEMENTS . . . . . . . . . . .(NWK) = 14190213
+     MAXIMUM HALF BANDWIDTH  . . . . . . . . . . . .(MK ) = 15039
+     MEAN HALF BANDWIDTH . . . . . . . . . . . . . .(MM ) = 938
+
+
+ LOAD CASE    1
+
+
+     DISPLACEMENT CSV = tmp\bridge1_pierE_0p30.displacements.csv
+
+
+ S O L U T I O N   T I M E   L O G   I N   S E C 
+
+     READ_TIME = 4.00000e-002
+     MPC_ALIAS_TIME = 0.00000e+000
+     CSR_PATTERN_TIME = 0.00000e+000
+     CSR_ASSEMBLY_TIME = 0.00000e+000
+     ELEMENT_VALUE_ASSEMBLY_TIME = 0.00000e+000
+     MPC_VALUE_ASSEMBLY_TIME = 0.00000e+000
+     ELEMENT_STIFFNESS_TIME = 0.00000e+000
+     PATTERN_INSERT_TIME = 0.00000e+000
+     VALUE_INSERT_TIME = 0.00000e+000
+     ACTIVE_DOF_PACK_TIME = 0.00000e+000
+     MPC_PATTERN_TIME = 0.00000e+000
+     EXPORT_UPPER_CSR_TIME = 0.00000e+000
+     SYMMETRY_CHECK_TIME = 0.00000e+000
+     SCALING_TIME = 0.00000e+000
+     PRECOND_SETUP_TIME = 0.00000e+000
+     ITER_SOLVE_TIME = 0.00000e+000
+     RESIDUAL_CHECK_TIME = 0.00000e+000
+     CSV_WRITE_TIME = 4.80000e-002
+     TOTAL_TIME = 5.87900e+000
+

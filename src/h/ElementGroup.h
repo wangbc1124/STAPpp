@@ -20,6 +20,9 @@
 #include "Beam.h"
 #include "H8.h"
 #include "Plate.h"
+#include "Beam3D.h"
+#include "Beam3DTimoshenko.h"
+#include "Shell4.h"
 #include "Material.h"
 #include "Node.h"
 
@@ -36,7 +39,12 @@ enum ElementTypes
     H8,     // 8H element
     Beam,   // Beam element
     Plate,  // Plate element
-    Shell   // Shell elment
+    Shell,  // Shell element
+    Beam3D, // 3D Beam element
+    Shell4, // 4-node flat shell element (membrane + plate bending)
+    Beam3DTimoshenko, // 3D Timoshenko beam element
+    H8R = 12, // 8-node reduced-integration hexahedral element
+    H8RPier = 14 // pier-local reduced-integration hexahedral element
 };
 
 //! Element group class
@@ -76,6 +84,9 @@ public:
 
     //! Read element group data from stream Input
     bool Read(ifstream& Input);
+
+    //! Read element group data after its header has already been parsed
+    bool Read(ifstream& Input, int ElementType, unsigned int NUME, unsigned int NUMMAT);
 
     //! Calculate the size of the derived element class and material class
     void CalculateMemberSize();

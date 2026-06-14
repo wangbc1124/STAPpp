@@ -80,6 +80,44 @@ public:
 	virtual void Write(COutputter& output);
 };
 
+//! Material class for Beam3D element (3D Euler-Bernoulli beam)
+class CBeam3DMaterial : public CMaterial
+{
+public:
+
+	double Nu;		//!< Poisson's ratio
+	double Area;	//!< Cross-sectional area
+	double Iy;		//!< Moment of inertia about local y' axis (bending in XZ plane)
+	double Iz;		//!< Moment of inertia about local z' axis (bending in XY plane)
+	double J;		//!< Torsional constant
+	double n1[3];	//!< Section principal axis direction vector (n1 direction)
+
+public:
+
+	virtual bool Read(ifstream& Input);
+	virtual void Write(COutputter& output);
+};
+
+//! Material class for Beam3DTimoshenko element (3D Timoshenko beam)
+class CBeam3DTimoshenkoMaterial : public CMaterial
+{
+public:
+
+	double Nu;		//!< Poisson's ratio
+	double Area;	//!< Cross-sectional area
+	double Iy;		//!< Moment of inertia about local y' axis
+	double Iz;		//!< Moment of inertia about local z' axis
+	double J;		//!< Torsional constant
+	double Asy;		//!< Effective shear area for local y' direction
+	double Asz;		//!< Effective shear area for local z' direction
+	double n1[3];	//!< Section reference direction vector
+
+public:
+
+	virtual bool Read(ifstream& Input);
+	virtual void Write(COutputter& output);
+};
+
 //! Material class for Q4 element
 class CQ4Material : public CMaterial
 {

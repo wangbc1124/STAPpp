@@ -1,0 +1,144 @@
+TITLE : H8 Patch Test - Single Element Uniaxial Tension
+        (17:56:43 on June 14, 2026, Sunday)
+
+C O N T R O L   I N F O R M A T I O N
+
+      NUMBER OF NODAL POINTS . . . . . . . . . . (NUMNP)  =     8
+      NUMBER OF ELEMENT GROUPS . . . . . . . . . (NUMEG)  =     1
+      NUMBER OF LOAD CASES . . . . . . . . . . . (NLCASE) =     1
+      SOLUTION MODE  . . . . . . . . . . . . . . (MODEX)  =     1
+         EQ.0, DATA CHECK
+         EQ.1, EXECUTION
+
+ N O D A L   P O I N T   D A T A
+
+    NODE       BOUNDARY                         NODAL POINT
+   NUMBER  CONDITION  CODES                     COORDINATES
+        1    1    1    1    1    1    1       0.00000e+00    0.00000e+00    0.00000e+00
+        2    0    0    0    1    1    1       1.00000e+00    0.00000e+00    0.00000e+00
+        3    0    0    0    1    1    1       1.00000e+00    5.00000e-01    0.00000e+00
+        4    1    0    0    1    1    1       0.00000e+00    5.00000e-01    0.00000e+00
+        5    1    0    0    1    1    1       0.00000e+00    0.00000e+00    1.00000e-01
+        6    0    0    0    1    1    1       1.00000e+00    0.00000e+00    1.00000e-01
+        7    0    0    0    1    1    1       1.00000e+00    5.00000e-01    1.00000e-01
+        8    1    0    0    1    1    1       0.00000e+00    5.00000e-01    1.00000e-01
+
+ L O A D   C A S E   D A T A
+
+     LOAD CASE NUMBER . . . . . . . =     1
+     NUMBER OF CONCENTRATED LOADS . =     4
+
+    NODE       DIRECTION      LOAD
+   NUMBER                   MAGNITUDE
+      2            1        5.00000e+04
+      3            1        5.00000e+04
+      6            1        5.00000e+04
+      7            1        5.00000e+04
+
+ EQUATION NUMBERS
+
+   NODE NUMBER   DEGREES OF FREEDOM
+        N           X    Y    Z   RX   RY   RZ
+        1           0    0    0    0    0    0
+        2           1    2    3    0    0    0
+        3           4    5    6    0    0    0
+        4           0    7    8    0    0    0
+        5           0    9   10    0    0    0
+        6          11   12   13    0    0    0
+        7          14   15   16    0    0    0
+        8           0   17   18    0    0    0
+
+ E L E M E N T   G R O U P   D A T A
+
+
+ E L E M E N T   D E F I N I T I O N
+
+ ELEMENT TYPE  . . . . . . . . . . . . .( NPAR(1) ) . . =    5
+     EQ.1, TRUSS ELEMENTS
+     EQ.2, FOUR-NODE PLANE ELEMENTS (FULL INTEGRATION)
+     EQ.3, FOUR-NODE PLANE ELEMENTS (REDUCED INTEGRATION)
+     EQ.4, THREE-NODE TRIANGULAR PLANE ELEMENTS (CST)
+     EQ.5, EIGHT-NODE HEXAHEDRAL ELEMENTS
+     EQ.6, TWO-NODE BEAM ELEMENTS
+     EQ.7, FOUR-NODE PLATE BENDING ELEMENTS
+     EQ.9, TWO-NODE 3D EULER-BERNOULLI BEAM ELEMENTS
+     EQ.10, FOUR-NODE FLAT SHELL ELEMENTS
+     EQ.11, TWO-NODE 3D TIMOSHENKO BEAM ELEMENTS
+     EQ.12, EIGHT-NODE REDUCED-INTEGRATION HEXAHEDRAL ELEMENTS
+     EQ.14, PIER-LOCAL REDUCED-INTEGRATION HEXAHEDRAL ELEMENTS
+
+ NUMBER OF ELEMENTS. . . . . . . . . . .( NPAR(2) ) . . =    1
+
+ M A T E R I A L   D E F I N I T I O N
+
+ NUMBER OF DIFFERENT SETS OF MATERIAL
+ AND SECTION CONSTANTS  . . . . . . .( NPAR(3) ) . . =    1
+
+  SET       YOUNG'S     POISSON'S
+ NUMBER     MODULUS       RATIO
+               E            Nu
+    1     2.00000e+11     3.00000e-01
+
+
+ E L E M E N T   I N F O R M A T I O N
+ ELEMENT      N1        N2        N3        N4
+ NUMBER-N     N5        N6        N7        N8       MATERIAL
+                                                      SET NUMBER
+    1        1        2        3        4        5        6        7        8           1
+
+	TOTAL SYSTEM DATA
+
+     NUMBER OF EQUATIONS . . . . . . . . . . . . . .(NEQ) = 18
+     NUMBER OF MATRIX ELEMENTS . . . . . . . . . . .(NWK) = 171
+     MAXIMUM HALF BANDWIDTH  . . . . . . . . . . . .(MK ) = 18
+     MEAN HALF BANDWIDTH . . . . . . . . . . . . . .(MM ) = 9
+
+
+ LOAD CASE    1
+
+
+ D I S P L A C E M E N T S
+
+  NODE           X-DISPLACEMENT    Y-DISPLACEMENT    Z-DISPLACEMENT    RX-ROTATION      RY-ROTATION      RZ-ROTATION
+    1               0.00000e+00       0.00000e+00       0.00000e+00       0.00000e+00       0.00000e+00       0.00000e+00
+    2               2.00000e-05       2.83088e-18       2.29236e-18       0.00000e+00       0.00000e+00       0.00000e+00
+    3               2.00000e-05      -3.00000e-06      -4.23120e-07       0.00000e+00       0.00000e+00       0.00000e+00
+    4               0.00000e+00      -3.00000e-06      -4.23120e-07       0.00000e+00       0.00000e+00       0.00000e+00
+    5               0.00000e+00       8.46240e-08      -6.00000e-07       0.00000e+00       0.00000e+00       0.00000e+00
+    6               2.00000e-05       8.46240e-08      -6.00000e-07       0.00000e+00       0.00000e+00       0.00000e+00
+    7               2.00000e-05      -2.91538e-06      -1.02312e-06       0.00000e+00       0.00000e+00       0.00000e+00
+    8               0.00000e+00      -2.91538e-06      -1.02312e-06       0.00000e+00       0.00000e+00       0.00000e+00
+
+ S T R E S S  C A L C U L A T I O N S  F O R  E L E M E N T  G R O U P    1
+
+  ELEMENT          SIGMA-X          SIGMA-Y          SIGMA-Z
+                    TAU-XY           TAU-YZ           TAU-ZX
+  NUMBER
+    1       4.00000e+06       4.65661e-10      -2.32831e-10
+           -4.07227e-10       1.46602e-10      -7.73732e-10
+
+     DISPLACEMENT CSV = D:\STAPpp-master\STAPpp\data\H8\patch\h8_patch_test.displacements.csv
+
+
+ S O L U T I O N   T I M E   L O G   I N   S E C 
+
+     READ_TIME = 2.00000e-03
+     MPC_ALIAS_TIME = 0.00000e+00
+     CSR_PATTERN_TIME = 0.00000e+00
+     CSR_ASSEMBLY_TIME = 0.00000e+00
+     ELEMENT_VALUE_ASSEMBLY_TIME = 0.00000e+00
+     MPC_VALUE_ASSEMBLY_TIME = 0.00000e+00
+     ELEMENT_STIFFNESS_TIME = 0.00000e+00
+     PATTERN_INSERT_TIME = 0.00000e+00
+     VALUE_INSERT_TIME = 0.00000e+00
+     ACTIVE_DOF_PACK_TIME = 0.00000e+00
+     MPC_PATTERN_TIME = 0.00000e+00
+     EXPORT_UPPER_CSR_TIME = 0.00000e+00
+     SYMMETRY_CHECK_TIME = 0.00000e+00
+     SCALING_TIME = 0.00000e+00
+     PRECOND_SETUP_TIME = 0.00000e+00
+     ITER_SOLVE_TIME = 0.00000e+00
+     RESIDUAL_CHECK_TIME = 0.00000e+00
+     CSV_WRITE_TIME = 1.00000e-03
+     TOTAL_TIME = 3.00000e-03
+
