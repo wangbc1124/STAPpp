@@ -72,7 +72,7 @@
 \setlength{\headheight}{15pt}
 \emergencystretch=2em
 \lhead{STAP++程序研发报告}
-\rhead{有限元方法课程设计}
+\rhead{有限元法基础课程设计}
 \cfoot{第 \thepage 页 / 共 \pageref{LastPage} 页}
 
 % =========================
@@ -138,7 +138,7 @@
 本文基于 STAP++ 有限元程序完成课程设计报告。STAP++ 采用 C++ 编写，输入、输出数据格式与 STAP90 保持一致，适合用于有限元程序框架学习和单元扩展验证。原程序已包含 Bar 杆单元；本文在此基础上新增五类单元功能，包括 Q4/Q4R 平面四边形单元族、T3 常应变三角形单元、Beam 梁单元、H8 八节点六面体实体单元和 Plate 四节点板弯曲单元。报告系统给出了各单元的基本假设、形函数、刚度矩阵、应力或内力计算方法，并说明了程序模块组织、输入文件格式、CMake 可迁移编译流程以及 Intel oneMKL PARDISO 大规模稀疏求解模块的配置和使用方法。为满足工程算例后处理需求，本文还实现了从完整 \texttt{.out} 文件直接生成 \texttt{.vtk} 文件的流程，并在应力可视化中采用超收敛分片重构法，将单元中心应力恢复为连续的节点应力场。验证结果表明，Q4、Q4R、T3、Beam、H8 和 Plate 均能完成相应片单元、分片或收敛性测试；Q4 和 H8 在粗网格弯曲问题中存在剪切锁定，Q4R 与 Plate 通过缩减积分或选择性缩减积分显著改善弯曲性能，Beam 单元在 Euler--Bernoulli 条件下可得到与理论解一致的结果。Bridge-1 工程算例进一步验证了混合单元建模、MPC 约束处理、PARDISO 求解和 VTK 后处理流程的可运行性；最终报告展示了桥面板和支撑梁两个低误差部件的位移误差，并给出了 Bridge-1 位移云图和基于超收敛分片重构的应力云图。
 \end{abstract}
 
-\noindent\textbf{关键词：} STAP++；有限元；Q4 单元；Q4R 单元；T3 单元；Beam 单元；H8 单元；Plate 单元；CMake；PARDISO；VTK 后处理；超收敛分片重构
+\noindent\textbf{关键词：} STAP++；有限元；Q4 单元；Q4R 单元；T3 单元；Beam 单元；H8 单元；Plate 单元；PARDISO；VTK 后处理；超收敛分片重构
 
 \newpage
 \tableofcontents
